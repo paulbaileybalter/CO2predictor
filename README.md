@@ -6,7 +6,8 @@ Static site (in `public/`) behind a password-gating Cloudflare Worker (`src/work
 1. Push this folder to a GitHub repo.
 2. Cloudflare dashboard → **Workers & Pages → Create → Import a repository**. Build command: none. Deploy command: `npx wrangler deploy`.
 3. Worker → **Settings → Variables and Secrets → Add** → type **Secret**, name `SITE_PASSWORD`, value = your password. Redeploy.
-4. Open the site; the browser asks for a login. Username: anything. Password: `SITE_PASSWORD`.
+4. Open the site; it shows a password-only sign-in page (no username). Cookie lasts 30 days.
+5. Shared data: the `DATA` KV namespace in `wrangler.jsonc` is created automatically on first deploy. If it isn't, create a KV namespace in the dashboard and bind it to the Worker as `DATA`. Readings, board uploads and plan changes are then shared by everyone (last save wins).
 
 Local test: create `.dev.vars` with `SITE_PASSWORD=test`, then `npm i && npm run dev`.
 (Alternative with no code: put Cloudflare Access in front of the Worker.)

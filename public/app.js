@@ -19,6 +19,9 @@
   function load() {
     let s = null;
     try { s = JSON.parse(localStorage.getItem(KEY)); } catch (e) { s = null; }
+    return normalise(s);
+  }
+  function normalise(s) {
     const seed = window.SEED || { board: {}, readings: [], version: '' };
     if (!s || typeof s !== 'object') {
       s = { seedVersion: seed.version, settings: {}, readings: seed.readings.map((r) => ({ ...r })), board: { ...seed.board }, overrides: {} };
@@ -34,7 +37,35 @@
     return s;
   }
   let state = load();
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable: keep working in memory */ } }
+  /* Saved in this browser AND (when the Worker's KV store is bound) shared with everyone who signs in. */
+  let pushT = null, syncOK = null;
+  function save() {
+    state.updated = Date.now();
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable: keep working in memory */ }
+    clearTimeout(pushT); pushT = setTimeout(push, 600);
+  }
+  async function push() {
+    try {
+      const r = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state) });
+      if (r.status === 401) { location.href = '/login'; return; }
+      syncOK = r.ok; if (!r.ok) toast('Saved on this computer only — shared storage is not set up');
+    } catch (e) { syncOK = false; }
+  }
+  async function pull() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) { syncOK = false; return; }
+      syncOK = true;
+      const remote = await r.json();
+      if (!remote) { push(); return; }                        // first use: publish what we have
+      if ((remote.updated || 0) > (state.updated || 0)) {
+        state = normalise(remote); state.updated = remote.updated;
+        try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+        render();
+      } else if ((remote.updated || 0) < (state.updated || 0)) push();
+    } catch (e) { syncOK = false; }
+  }
 
   /* ---------- formatting ---------- */
   const fmtD = (d) => { const [, m, day] = d.split('-').map(Number); return `${DOW[M.dow(d)]} ${day} ${MON[m - 1]}`; };
@@ -418,7 +449,7 @@
           <button class="btn small" data-act="export">Export data</button>
           <button class="btn small" data-act="import">Import data</button>
           <button class="btn small" data-act="defaults">Reset settings</button>
-          <span class="muted" style="font-size:12px">Everything is saved in this browser. Export to back up or open on another computer.</span></div></div>
+          <span class="muted" style="font-size:12px">Readings, board uploads and plan changes are shared with everyone who signs in. Export to keep a backup.</span></div></div>
       </div>
     </section>`;
   }
@@ -578,4 +609,6 @@
   })();
 
   render();
+  pull();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
 })();
