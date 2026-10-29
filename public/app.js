@@ -85,8 +85,12 @@
     const model = M.fit(q.obs);
     const rows = q.rows;
     const latest = rows[rows.length - 1];
-    let startDate, startLevel, lastLabel;
-    if (latest && latest.pm !== null) { startDate = M.addDays(latest.d, 1); startLevel = latest.pm; lastLabel = `${fmtS(latest.d)} evening`; }
+    let startDate, startLevel, lastLabel, frac0 = 1;
+    if (latest && latest.cur && latest.pm === null) {
+      const h = +latest.cur.h.split(':')[0] + +latest.cur.h.split(':')[1] / 60;
+      startDate = latest.d; startLevel = latest.cur.v; lastLabel = `${fmtS(latest.d)} ${latest.cur.h}`;
+      frac0 = h < 6 ? 1 : Math.min(1, Math.max(0.05, (17 - h) / 11));     // working-day draw runs ~6am–5pm
+    } else if (latest && latest.pm !== null) { startDate = M.addDays(latest.d, 1); startLevel = latest.pm; lastLabel = `${fmtS(latest.d)} evening`; }
     else if (latest && latest.am !== null) { startDate = latest.d; startLevel = latest.am; lastLabel = `${fmtS(latest.d)} morning`; }
     else { startDate = TODAY; startLevel = 50; lastLabel = 'no readings yet'; }
 
@@ -98,7 +102,7 @@
       const base = state.board[d] || [0, 0, 0, 0, 0], ov = state.overrides[d];
       return base.map((v, i) => (ov && ov[i] !== null && ov[i] !== undefined ? ov[i] : v));
     };
-    const days = M.range(startDate, end).map((d) => ({ d, rec: recFor(d) }));
+    const days = M.range(startDate, end).map((d, i) => ({ d, rec: recFor(d), frac: i === 0 ? frac0 : 1 }));
     const cfg = { floor: set.floor, loadPct: set.load / set.cap * 100, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
     const sim = M.simulate({ startLevel, days, model, cfg });
 
@@ -113,7 +117,7 @@
     const hist = q.obs.map((o, i) => ({ ...o, pred: model.ok ? model.pred[i] : null }));
     const last7 = hist.filter((o) => M.diffDays(o.d, startDate) <= 8);
     const act7 = last7.length ? last7.reduce((s, o) => s + o.use, 0) / last7.reduce((s, o) => s + o.n, 0) : null;
-    C = { q, model, rows, latest, startDate, startLevel, lastLabel, days, end, boardEnd, lastBoard, cfg, sim, past, hist, act7, recFor };
+    C = { frac0, q, model, rows, latest, startDate, startLevel, lastLabel, days, end, boardEnd, lastBoard, cfg, sim, past, hist, act7, recFor };
   }
 
   /* ---------- status of next delivery ---------- */
@@ -254,12 +258,14 @@
     // history line + dots
     const hp = [];
     hist.forEach((r) => { if (r.am !== null) hp.push([x(r.d, FA), y(r.am), r.d, 'AM', r.am]); if (r.pm !== null) hp.push([x(r.d, FP), y(r.pm), r.d, 'PM', r.pm]); });
+    const liveCur = C.latest && C.latest.cur && C.latest.pm === null ? C.latest : null;
+    if (liveCur) { const h = +liveCur.cur.h.split(':')[0] + +liveCur.cur.h.split(':')[1] / 60; hp.push([x(liveCur.d, Math.min(FP, Math.max(FA, FA + (h - 6.5) / 10.75 * (FP - FA)))), y(liveCur.cur.v), liveCur.d, 'NOW', liveCur.cur.v]); }
     if (hp.length) g += `<polyline points="${hp.map((p) => p[0] + ',' + p[1]).join(' ')}" fill="none" stroke="#000" stroke-width="2.2" stroke-linejoin="round"/>`;
     hp.forEach((p) => (g += `<circle cx="${p[0]}" cy="${p[1]}" r="2.8" fill="#fff" stroke="#000" stroke-width="1.6"/>`));
     // forecast line
     const fp = [];
-    if (hp.length && C.latest && C.latest.pm !== null) fp.push(hp[hp.length - 1].slice(0, 2));
-    sim.rows.forEach((r) => { fp.push([x(r.d, FA), y(r.s)]); fp.push([x(r.d, FP), y(r.e)]); });
+    if (hp.length && C.latest && (C.latest.pm !== null || liveCur)) fp.push(hp[hp.length - 1].slice(0, 2));
+    sim.rows.forEach((r, i) => { if (!(i === 0 && liveCur)) fp.push([x(r.d, FA), y(r.s)]); fp.push([x(r.d, FP), y(r.e)]); });
     if (fp.length) g += `<polyline points="${fp.map((p) => p[0] + ',' + p[1]).join(' ')}" fill="none" stroke="#7566A0" stroke-width="2.6" stroke-dasharray="7 5" stroke-linejoin="round"/>`;
     // deliveries received
     C.past.forEach((dv) => {
@@ -278,7 +284,7 @@
     if (TODAY >= first && TODAY <= last) g += `<line x1="${x(TODAY, 0.5)}" x2="${x(TODAY, 0.5)}" y1="${T}" y2="${H - B}" stroke="#000" stroke-width="1"/><text class="lbl" x="${x(TODAY, 0.5) + 5}" y="${T + 9}">Today</text>`;
     // tooltips
     tips = {};
-    hist.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b><br>${r.am !== null ? 'Morning ' + fP(r.am) + ' (' + fT(r.am) + ')<br>' : ''}${r.pm !== null ? 'Evening ' + fP(r.pm) + ' (' + fT(r.pm) + ')' : ''}`; });
+    hist.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b><br>${r.cur && r.pm === null ? 'Now (' + r.cur.h + ') ' + fP(r.cur.v) + ' (' + fT(r.cur.v) + ')<br>' : ''}${r.am !== null ? 'Morning ' + fP(r.am) + ' (' + fT(r.am) + ')<br>' : ''}${r.pm !== null ? 'Evening ' + fP(r.pm) + ' (' + fT(r.pm) + ')' : ''}`; });
     C.past.forEach((dv) => { tips[dv.d] = (tips[dv.d] || '') + `<br><span style="color:#47D7AC">▲ Delivery received ≈ ${dv.t.toFixed(0)} t</span>`; });
     sim.rows.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b> · forecast<br>Use ${fT(r.use)} (${fP(r.use)})<br>Start ${fP(r.s)} → end ${fP(r.e)} (${fT(r.e)})${r.add ? '<br><span style="color:#FDAA63">◆ Delivery +' + fT(r.add) + '</span>' : ''}<br><span style="opacity:.7">90% range at end ${fP(r.lo, 0)}–${fP(r.hi, 0)}</span>`; });
     const plotX = [x(first, 0), x(last, 1)];
@@ -297,6 +303,7 @@
       }).join('');
       const wk = [0, 6].includes(M.dow(d));
       const notes = [];
+      if (i === 0 && C.frac0 < 1) notes.push('<span class="chip info"><i></i>Rest of today</span>');
       if (r.add) notes.push(`<span class="chip st-ok"><i></i>Delivery +${fT(r.add)}</span>`);
       if (r.e < set.floor && !r.add) notes.push('<span class="chip st-order"><i></i>Below floor</span>');
       if (!r.add && r.e < 0) notes.push('<span class="chip st-risk"><i></i>Empty</span>');
@@ -406,7 +413,7 @@
       return `<tr><td class="sticky-col">${fmtD(r.d)}</td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.am === null ? '' : r.am}" data-d="${r.d}" data-f="am" aria-label="Morning level ${r.d}"></td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.pm === null ? '' : r.pm}" data-d="${r.d}" data-f="pm" aria-label="Evening level ${r.d}"></td>
-        <td>${dv ? `<span class="chip ${dv.t < set.load * 0.85 ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.t < set.load * 0.85 ? ' — short load?' : ''}</span>` : ''}</td>
+        <td>${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.t < set.load * 0.85 ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.t < set.load * 0.85 ? ' — short load?' : ''}</span>` : ''}</td>
         <td class="r"><button class="btn small x" data-act="delReading" data-d="${r.d}" aria-label="Delete reading ${r.d}">×</button></td></tr>`;
     }).join('');
     const notes = C.q.notes.map((n) => `<li><b>${fmtS(n.d)}:</b> ${esc(n.text)}</li>`).join('');
@@ -414,13 +421,15 @@
     const boardMsg = C.lastBoard ? `Board loaded to <b>${fmtD(C.lastBoard)}</b>; transfers planned to <b>${C.boardEnd ? fmtD(C.boardEnd) : 'none'}</b>.` : 'No board loaded.';
     return `<section class="sec" id="readings">
       <div class="sec-head"><div><span class="eyebrow">Data</span><h2>Daily readings</h2>
-        <p>Enter the vessel level (% on the gauge) from the morning and evening handover. A jump up is picked up automatically as a delivery.</p></div>
+        <p>Enter the vessel level (% on the gauge) from the morning and evening handover. Use “Right now” for a mid-day check — the forecast then only counts the rest of today's use. A jump up is picked up automatically as a delivery.</p></div>
         <div class="row"><button class="btn small" data-act="pickCo2">Import CO2 handover sheet</button><button class="btn small" data-act="pickLbb">Import Live Brewery Board</button></div></div>
       <div class="panel pad">
         <div class="form-row">
           <label class="fld"><span>Date</span><input type="date" id="rdDate" value="${TODAY}"></label>
           <label class="fld"><span>Morning %</span><input type="number" id="rdAm" step="0.1" min="0" max="100" placeholder="e.g. 64.5"></label>
           <label class="fld"><span>Evening %</span><input type="number" id="rdPm" step="0.1" min="0" max="100" placeholder="e.g. 59.5"></label>
+          <label class="fld"><span>Right now %</span><input type="number" id="rdNow" step="0.1" min="0" max="100" placeholder="mid-day level"></label>
+          <label class="fld"><span>Time</span><input type="time" id="rdTime" value="${nowHM()}"></label>
           <button class="btn teal" data-act="saveReading">Save reading</button>
         </div>
         <p class="muted" style="font-size:12px;margin-top:10px">${boardMsg} Upload a fresh board export whenever the plan changes.</p>
@@ -487,11 +496,12 @@
   function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 3600); }
   const num = (v) => { if (v === '' || v === null || v === undefined) return null; const n = parseFloat(v); return isFinite(n) ? n : null; };
 
+  const nowHM = () => { const n = new Date(); return String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0'); };
   function setReading(d, field, val) {
     let r = state.readings.find((x) => x.d === d);
     if (!r) { r = { d, am: null, pm: null }; state.readings.push(r); }
-    r[field] = val;
-    if (r.am === null && r.pm === null) state.readings = state.readings.filter((x) => x !== r);
+    if (field === 'cur') { if (val) r.cur = val; else delete r.cur; } else r[field] = val;
+    if (r.am === null && r.pm === null && !r.cur) state.readings = state.readings.filter((x) => x !== r);
     state.readings.sort((a, b) => (a.d < b.d ? -1 : 1));
   }
 
@@ -540,8 +550,10 @@
     if (a === 'saveReading') {
       const d = $('#rdDate').value, am = num($('#rdAm').value), pm = num($('#rdPm').value);
       if (!d) return toast('Pick a date');
-      if (am === null && pm === null) return toast('Enter a morning or evening level');
-      if ((am !== null && (am < 0 || am > 100)) || (pm !== null && (pm < 0 || pm > 100))) return toast('Levels are a percentage between 0 and 100');
+      const now = num($('#rdNow').value), tm = $('#rdTime').value || nowHM();
+      if (am === null && pm === null && now === null) return toast('Enter a morning, evening or right-now level');
+      if ([am, pm, now].some((v) => v !== null && (v < 0 || v > 100))) return toast('Levels are a percentage between 0 and 100');
+      if (now !== null) setReading(d, 'cur', { v: now, h: tm });
       if (am !== null) setReading(d, 'am', am);
       if (pm !== null) setReading(d, 'pm', pm);
       save(); render(); toast(`Saved ${fmtD(d)}`);

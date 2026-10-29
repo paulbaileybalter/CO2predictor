@@ -115,7 +115,11 @@
   function simulate(opts) {
     const { start, startLevel, days, model, cfg } = opts;     // days: [{ d, rec }]
     const sigma = Math.max(0.6, model.loo || model.rmse || 1);
-    const use = days.map((x) => predictDay(model, x.rec));
+    const use = days.map((x) => {
+      const p = predictDay(model, x.rec);
+      if (x.frac != null && x.frac < 1) p.total = Math.max(0.1, p.total * x.frac);   // day already part-way through
+      return p;
+    });
     const allowed = (d) => cfg.allowedDows.includes(dow(d));
     const del = new Map();
     const run = (withDeliveries) => {
