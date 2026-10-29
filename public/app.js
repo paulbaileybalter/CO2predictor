@@ -30,8 +30,12 @@
       seed.readings.forEach((r) => map.set(r.d, { ...r }));
       s.readings = [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
       s.board = { ...(s.board || {}), ...seed.board };
-      s.seedVersion = seed.version;
+      s.seedVersion = seed.version; s.invNeedsSeed = true;
     }
+    const seedInv = window.INVOICES || [];
+    if (!Array.isArray(s.invoices)) s.invoices = seedInv.map((x) => ({ ...x }));
+    else if (s.invNeedsSeed) { const m = new Map(s.invoices.map((x) => [x.date + '|' + x.docket, x])); seedInv.forEach((x) => m.set(x.date + '|' + x.docket, { ...x })); s.invoices = [...m.values()]; }
+    delete s.invNeedsSeed;
     s.settings = { ...DEFAULTS, ...(s.settings || {}) };
     s.overrides = s.overrides || {};
     return s;
@@ -123,7 +127,8 @@
     const hist = q.obs.map((o, i) => ({ ...o, pred: model.ok ? model.pred[i] : null }));
     const last7 = hist.filter((o) => M.diffDays(o.d, startDate) <= 8);
     const act7 = last7.length ? last7.reduce((s, o) => s + o.use, 0) / last7.reduce((s, o) => s + o.n, 0) : null;
-    C = { frac0, q, model, rows, latest, startDate, startLevel, lastLabel, days, end, boardEnd, lastBoard, cfg, sim, past, hist, act7, recFor };
+    C = { inv: null, frac0, q, model, rows, latest, startDate, startLevel, lastLabel, days, end, boardEnd, lastBoard, cfg, sim, past, hist, act7, recFor };
+    C.inv = matchInvoices();
   }
 
   /* ---------- status of next delivery ---------- */
@@ -410,6 +415,118 @@
     </section>`;
   }
 
+
+  /* ---------- invoices vs gauge ---------- */
+  const RATE_RISE_OCT = 0.075;                       // Supagas notice: bulk liquids +7.5% from 1 Oct 2026
+  function matchInvoices() {
+    const set = S(), kgPt = set.cap * 10, rows = C.q.rows, R = {};
+    rows.forEach((r) => (R[r.d] = r));
+    const firstR = rows.length ? rows[0].d : null;
+    const useSum = (a, b) => { let t = 0; for (let d = a; d <= b; d = M.addDays(d, 1)) t += M.predictDay(C.model, C.recFor(d)).total; return t; };
+    const pmOnly = (d) => (R[d] && R[d].pm !== null ? R[d].pm : null);
+    const endAny = (d) => (pmOnly(d) !== null ? pmOnly(d) : (R[M.addDays(d, 1)] && R[M.addDays(d, 1)].am !== null ? R[M.addDays(d, 1)].am : null));
+    const list = state.invoices.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.docket < b.docket ? -1 : 1));
+    const out = list.map((inv) => {
+      const o = { ...inv, rate: inv.kg ? inv.ex / inv.kg : 0, pts: null, gaugeKg: null, diff: null, status: 'nodata', note: '', gdate: null, S: null };
+      if (inv.kg < 1000) { o.status = 'tiny'; o.note = `Only ${inv.kg} kg — looks keyed in tonnes. Likely a duplicate of the real load on this date.`; return o; }
+      if (!firstR || inv.date <= firstR) return o;
+      for (const off of [0, -1, 1, -2, 2]) {
+        const D = M.addDays(inv.date, off);
+        let S0 = null, Sd = null;
+        for (let k = 1; k <= 3 && S0 === null; k++) { const dd = M.addDays(D, -k); const v = pmOnly(dd) !== null ? pmOnly(dd) : (k > 1 && R[M.addDays(dd, 1)] && R[M.addDays(dd, 1)].am !== null ? R[M.addDays(dd, 1)].am : null); if (v !== null) { S0 = v; Sd = dd; } }
+        if (S0 === null) continue;
+        const r = R[D] || {};
+        let pts, how, gap = M.diffDays(Sd, D) - 1;
+        if (r.am !== null && r.am !== undefined && r.am > S0 + 3) { pts = r.am - S0 + (gap > 0 ? useSum(M.addDays(Sd, 1), M.addDays(D, -1)) : 0); how = 'morning'; }
+        else {
+          let Ed = D, E = endAny(D); if (E === null) { Ed = M.addDays(D, 1); E = endAny(Ed); }
+          if (E === null) continue;
+          pts = E - S0 + useSum(M.addDays(Sd, 1), Ed); how = 'evening'; gap += M.diffDays(D, Ed);
+        }
+        if (pts > 8) { o.pts = pts; o.S = S0; o.Sd = Sd; o.gdate = D; o.how = how; o.gap = gap; break; }
+      }
+      if (o.pts === null) { o.note = 'No clear rise on the gauge around this date (readings missing?).'; o.status = 'nogauge'; return o; }
+      o.gaugeKg = o.pts * kgPt; o.diff = inv.kg - o.gaugeKg;
+      const tol = Math.max(1500 + 600 * o.gap, 0.12 * inv.kg);
+      const Seff = o.S - (M.diffDays(o.Sd, inv.date) > 1 ? useSum(M.addDays(o.Sd, 1), M.addDays(inv.date, -1)) : 0);   // level just before the truck
+      if (Seff + inv.kg / kgPt > 105) { o.status = 'nofit'; o.note = `A ${(inv.kg / 1000).toFixed(1)} t load can't fit on top of the ≈${fP(Math.max(0, Seff))} the gauge implies just before it (${fmtS(o.Sd)} evening was ${fP(o.S)}). Check the readings around ${fmtS(inv.date)}.`; }
+      else if (Math.abs(o.diff) <= tol) { o.status = 'ok'; }
+      else if (o.diff > 0) { o.status = 'low'; o.note = `Invoiced ${(o.diff / 1000).toFixed(1)} t more than the gauge rose${o.gap > 0 ? ' (readings missing around it)' : ''}.`; }
+      else { o.status = 'high'; o.note = `Gauge rose ${(-o.diff / 1000).toFixed(1)} t more than invoiced.`; }
+      if (o.gdate !== inv.date) o.note = (o.note ? o.note + ' ' : '') + `Gauge shows it on ${fmtS(o.gdate)}.`;
+      return o;
+    });
+    // gauge deliveries with no invoice
+    const invDates = out.map((x) => x.date), lastInv = invDates.length ? invDates[invDates.length - 1] : '0000';
+    const unmatched = C.past.filter((x) => x.pts > 8 && !invDates.some((d) => Math.abs(M.diffDays(d, x.d)) <= 2));
+    const missing = unmatched.filter((x) => x.d <= lastInv), upcoming = unmatched.filter((x) => x.d > lastInv);
+    // rate history
+    const rates = []; out.forEach((x) => { if (x.kg >= 1000) { const r = +x.rate.toFixed(4), l = rates[rates.length - 1]; if (!l || l.rate !== r) rates.push({ date: x.date, rate: r }); } });
+    const matched = out.filter((x) => x.gaugeKg !== null && x.status !== 'nofit');
+    const ratios = matched.filter((x) => x.pts > 20).map((x) => x.kg / x.pts).sort((a, b) => a - b);
+    const calib = ratios.length >= 3 ? ratios[Math.floor(ratios.length / 2)] : null;
+    const lastRate = rates.length ? rates[rates.length - 1].rate : 0.75;
+    return { out, missing, upcoming, rates, calib, lastRate, newRate: lastRate * (1 + RATE_RISE_OCT) };
+  }
+
+  const STATUS = {
+    ok: ['st-ok', 'Matches gauge'], low: ['st-order', 'Invoiced more'], high: ['info', 'Gauge higher'], nofit: ['st-risk', "Doesn't fit"],
+    tiny: ['st-risk', 'Odd line'], nogauge: ['st-watch', 'No gauge rise'], nodata: ['plain', 'Before readings']
+  };
+  const money = (v) => '$' + v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function renderInvoices() {
+    const I = C.inv, set = S(), kgPt = set.cap * 10;
+    const rows = I.out;
+    const real = rows.filter((x) => x.kg >= 1000);
+    const totKg = real.reduce((s, x) => s + x.kg, 0), totEx = rows.reduce((s, x) => s + x.ex, 0);
+    const flagged = rows.filter((x) => ['low', 'high', 'nofit', 'tiny', 'nogauge'].includes(x.status));
+    const dup = rows.filter((x) => x.status === 'tiny');
+    const part = real.filter((x) => x.kg < 12000);
+    // months
+    const mon = {}; rows.forEach((x) => { const k = x.date.slice(0, 7); (mon[k] = mon[k] || { n: 0, kg: 0, ex: 0 }); if (x.kg >= 1000) mon[k].n++; mon[k].kg += x.kg; mon[k].ex += x.ex; });
+    const monRows = Object.keys(mon).sort().map((k) => { const m = mon[k], [y, mm] = k.split('-'); return `<tr><td class="sticky-col">${MON[+mm - 1]} ${y}</td><td class="r num">${m.n}</td><td class="r num">${(m.kg / 1000).toFixed(1)} t</td><td class="r num">${(m.kg / 1000 / (new Date(+y, +mm, 0).getDate()) * 1000 / 1000).toFixed(2)} t</td><td class="r num">${money(m.ex)}</td></tr>`; }).join('');
+    const finds = [];
+    dup.forEach((x) => finds.push(`<li><b>${fmtD(x.date)} — ${(x.kg).toFixed(2)} kg line (${money(x.ex * 1.1)} inc GST).</b> Docket ${esc(x.docket)} sits beside the real ${fmtD(x.date)} load (docket ${esc((rows.find((y) => y.date === x.date && y.kg >= 1000) || {}).docket || '–')}), whose docket number is one digit short — it looks like the same delivery entered twice, once in tonnes. Worth querying with Supagas for a credit.</li>`));
+    rows.filter((x) => x.status === 'nofit').forEach((x) => finds.push(`<li><b>${fmtD(x.date)} — ${(x.kg / 1000).toFixed(1)} t invoiced.</b> ${esc(x.note)} Either the reading is off or the load size is.</li>`));
+    rows.filter((x) => x.status === 'low' || x.status === 'high').forEach((x) => finds.push(`<li><b>${fmtD(x.date)} — ${(x.kg / 1000).toFixed(1)} t invoiced vs ≈${(x.gaugeKg / 1000).toFixed(1)} t on the gauge.</b> ${esc(x.note)}</li>`));
+    rows.filter((x) => x.status === 'nogauge').forEach((x) => finds.push(`<li><b>${fmtD(x.date)} — ${(x.kg / 1000).toFixed(1)} t invoiced.</b> ${esc(x.note)}</li>`));
+    I.missing.forEach((x) => finds.push(`<li><b>${fmtD(x.d)}</b> — the gauge rose about ${fT(x.pts)} but there is no invoice line within 2 days. Small top-up, or a reading error?</li>`));
+    const ratesTxt = I.rates.length > 1 ? I.rates.map((r, i) => `${i ? '→ ' : ''}$${r.rate.toFixed(4)}/kg from ${fmtS(r.date)}`).join(' ') : '';
+    const up = I.upcoming;
+    const upKg = up.reduce((s, x) => s + x.pts * kgPt, 0);
+    const calibTxt = I.calib ? `Across the matched loads, one gauge point works out to about <b>${I.calib.toFixed(0)} kg</b> invoiced (you've set ${kgPt}). ${Math.abs(I.calib - kgPt) / kgPt > 0.05 ? 'If that holds, the true vessel size is nearer ' + (I.calib / 10).toFixed(0) + ' t than ' + set.cap + ' t.' : 'That is in line with a ' + set.cap + ' t vessel.'}` : '';
+    const body = rows.slice().reverse().map((x) => {
+      const [cls, lbl] = STATUS[x.status];
+      return `<tr class="${x.status === 'ok' || x.status === 'nodata' ? '' : 'wk'}"><td class="sticky-col">${fmtD(x.date)}</td><td>${esc(x.docket)}</td><td class="r num"><b>${x.kg >= 1000 ? (x.kg / 1000).toFixed(2) + ' t' : x.kg + ' kg'}</b></td><td class="r num">${money(x.ex)}</td><td class="r num">${x.kg ? '$' + x.rate.toFixed(4) : ''}</td><td class="r num">${x.gaugeKg === null ? '<span class="muted">–</span>' : (x.gaugeKg / 1000).toFixed(1) + ' t'}</td><td class="r num">${x.diff === null ? '' : (x.diff > 0 ? '+' : '') + (x.diff / 1000).toFixed(1) + ' t'}</td><td><span class="chip ${cls}"><i></i>${lbl}</span>${x.note ? `<small>${esc(x.note)}</small>` : ''}</td><td class="r"><button class="btn small x" data-act="delInvoice" data-key="${esc(x.date + '|' + x.docket)}" aria-label="Delete line">×</button></td></tr>`;
+    }).join('');
+    return `<section class="sec" id="invoices">
+      <div class="sec-head"><div><span class="eyebrow">Supagas statements</span><h2>Bulk CO2 invoiced vs. recorded</h2>
+        <p>Every “CO2 GAS BULK” line from the monthly statements, set against how far the vessel gauge rose that day (plus the use predicted for it). The gauge figure is an estimate — treat gaps of a couple of tonnes as noise and look at the big ones.</p></div>
+        <div class="row"><button class="btn small" data-act="csv">Download CSV</button></div></div>
+      <div class="panel"><div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+        <div class="kpi"><small>Delivered, Jan–Sep</small><b>${(totKg / 1000).toFixed(0)} t</b><p>${real.length} loads on the statements</p></div>
+        <div class="kpi"><small>Billed (ex GST)</small><b>${money(totEx)}</b><p>bulk CO2 gas only, excl. tank rental</p></div>
+        <div class="kpi"><small>Price per kg</small><b>$${I.lastRate.toFixed(4)}</b><p>${esc(ratesTxt)}${ratesTxt ? '. ' : ''}From 1 Oct: +7.5% ≈ $${I.newRate.toFixed(4)}</p></div>
+        <div class="kpi"><small>Lines to query</small><b>${flagged.length + I.missing.length}</b><p>${part.length} part loads under 12 t are normal top-ups</p></div>
+      </div>
+      ${finds.length ? `<div class="banner bad" style="margin:0 18px 14px;display:block"><b>Differences worth checking</b><ul class="plain" style="margin-top:6px">${finds.join('')}</ul></div>` : ''}
+      ${up.length ? `<div class="note" style="padding-top:0"><b>Expected on the October statement:</b> ${up.map((x) => fmtS(x.d)).join(', ')} — about ${(upKg / 1000).toFixed(0)} t by the gauge, roughly ${money(upKg * I.newRate)} ex GST at the new rate. Compare when it arrives.</div>` : ''}
+      ${calibTxt ? `<div class="note" style="padding-top:0">${calibTxt}</div>` : ''}
+      </div>
+      <div class="drv" style="margin-top:14px;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)">
+        <div class="panel"><div class="tbl-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>Invoice date</th><th>Docket</th><th class="r">Invoiced</th><th class="r">$ ex GST</th><th class="r">$/kg</th><th class="r">Gauge est.</th><th class="r">Diff</th><th>Check</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>
+        <div class="panel"><div class="pad" style="padding-bottom:4px"><b>By month</b></div><div class="tbl-wrap"><table><thead><tr><th>Month</th><th class="r">Loads</th><th class="r">Delivered</th><th class="r">t / day</th><th class="r">$ ex GST</th></tr></thead><tbody>${monRows}</tbody></table></div></div>
+      </div>
+      <details class="panel" style="margin-top:14px"><summary>Add an invoice line <small>from next month's statement</small></summary><div class="pad"><div class="form-row">
+        <label class="fld"><span>Date</span><input type="date" id="ivDate"></label>
+        <label class="fld"><span>Docket</span><input type="text" id="ivDocket" placeholder="e.g. 1913290"></label>
+        <label class="fld"><span>Quantity (kg)</span><input type="number" id="ivKg" step="1" min="0"></label>
+        <label class="fld"><span>Line total ex GST ($)</span><input type="number" id="ivEx" step="0.01" min="0" placeholder="blank = qty × latest rate"></label>
+        <button class="btn teal" data-act="addInvoice">Add line</button></div></div></details>
+    </section>`;
+  }
+
   /* ---------- readings ---------- */
   function renderReadings() {
     const set = S();
@@ -475,7 +592,7 @@
   function render() {
     const y = window.scrollY;
     compute();
-    $('#app').innerHTML = renderHero() + renderForecast() + renderDrivers() + renderReadings() + renderSettings();
+    $('#app').innerHTML = renderHero() + renderForecast() + renderDrivers() + renderInvoices() + renderReadings() + renderSettings();
     window.scrollTo(0, y);
     bindChart();
   }
@@ -566,6 +683,18 @@
       if (pm !== null) setReading(d, 'pm', pm);
       save(); render(); toast(`Saved ${fmtD(d)}`);
     } else if (a === 'delReading') { state.readings = state.readings.filter((r) => r.d !== b.dataset.d); save(); render(); }
+    else if (a === 'delInvoice') { state.invoices = state.invoices.filter((x) => x.date + '|' + x.docket !== b.dataset.key); save(); render(); }
+    else if (a === 'addInvoice') {
+      const d = $('#ivDate').value, dk = $('#ivDocket').value.trim() || 'manual', kg = num($('#ivKg').value); let ex = num($('#ivEx').value);
+      if (!d || !kg) return toast('Enter a date and a quantity in kg');
+      if (ex === null) ex = Math.round(kg * C.inv.lastRate * 100) / 100;
+      state.invoices.push({ date: d, docket: dk, kg, ex, stmt: 'manual' }); save(); render(); toast('Invoice line added');
+    } else if (a === 'csv') {
+      const head = ['Invoice date', 'Docket', 'Invoiced kg', '$ ex GST', '$/kg', 'Gauge estimate kg', 'Difference kg', 'Check', 'Note'];
+      const q = (v) => '"' + String(v).replace(/"/g, '""') + '"';
+      const lines = [head.join(',')].concat(C.inv.out.map((x) => [x.date, q(x.docket), x.kg, x.ex.toFixed(2), x.rate.toFixed(4), x.gaugeKg === null ? '' : Math.round(x.gaugeKg), x.diff === null ? '' : Math.round(x.diff), q(STATUS[x.status][1]), q(x.note)].join(',')));
+      const el = document.createElement('a'); el.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); el.download = 'balter-co2-invoices-vs-gauge.csv'; el.click(); setTimeout(() => URL.revokeObjectURL(el.href), 2000);
+    }
     else if (a === 'resetOv') { state.overrides = {}; save(); render(); toast('Plan changes cleared'); }
     else if (a === 'pickCo2') $('#co2File').click();
     else if (a === 'pickLbb') $('#lbbFile').click();

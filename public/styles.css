@@ -199,3 +199,5 @@ ul.plain li{margin:3px 0}
   .panel,.tile{box-shadow:none}
   .sec{break-inside:avoid-page}
 }
+td.num{white-space:nowrap}
+@media (max-width:980px){#invoices .drv{grid-template-columns:1fr!important}#invoices .kpis{grid-template-columns:1fr 1fr!important}}
