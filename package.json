@@ -1,0 +1,11 @@
+{
+  "name": "balter-co2-predictor",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "seed": "node tools/build-seed.cjs"
+  },
+  "devDependencies": { "wrangler": "^4.0.0", "xlsx": "0.18.5" }
+}
