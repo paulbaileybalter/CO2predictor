@@ -56,17 +56,32 @@
       }
       keep.push(r);
     });
-    return { rows: keep, notes };
+    // a fall of more than 20 points in a day is not possible from use alone: treat that evening figure as a typo
+    let prev = null;
+    const rows2 = keep.map((r) => {
+      if (r.pm !== null && prev && diffDays(prev.d, r.d) > 0 && (prev.pm - r.pm) / diffDays(prev.d, r.d) > 20) {
+        notes.push({ d: r.d, text: `Evening level ${r.pm} is ${(prev.pm - r.pm).toFixed(0)} points below the previous evening — too big a drop for one day, so it is ignored (typo?).` });
+        return { ...r, pm: null };
+      }
+      if (r.pm !== null) prev = r;
+      return r;
+    });
+    return { rows: rows2, notes };
   }
 
   function observations(readings, board) {
     const { rows, notes } = cleanReadings(readings);
-    const pms = rows.filter((r) => r.pm !== null);
+    // end-of-day level = evening reading, or (if missing) the next morning's reading, since overnight loss is tiny
+    const endOf = {};
+    rows.forEach((r) => { if (r.pm !== null) endOf[r.d] = r.pm; });
+    const viaAm = {};
+    rows.forEach((r) => { const prev = addDays(r.d, -1); if (r.am !== null && endOf[prev] === undefined) { endOf[prev] = r.am; viaAm[prev] = true; } });
+    const pms = Object.keys(endOf).sort().map((d) => ({ d, pm: endOf[d], viaAm: !!viaAm[d] }));
     const obs = [], deliveries = [];
     for (let i = 1; i < pms.length; i++) {
       const a = pms[i - 1], b = pms[i], span = diffDays(a.d, b.d), drop = a.pm - b.pm;
       const days = range(addDays(a.d, 1), b.d);
-      if (drop < -3) { deliveries.push({ d: b.d, from: a.d, rise: -drop, days: span }); continue; }
+      if (drop < -3) { deliveries.push({ d: b.viaAm ? addDays(b.d, 1) : b.d, from: a.d, rise: -drop, days: span }); continue; }
       if (span > 4) { notes.push({ d: b.d, text: `${span}-day gap in readings before this date — not used for fitting.` }); continue; }
       if (drop < 0.5) { notes.push({ d: b.d, text: `Level barely moved (${drop.toFixed(1)}) since ${a.d} — not used for fitting.` }); continue; }
       const x = new Array(NF).fill(0);
@@ -76,31 +91,47 @@
     return { obs, deliveries, notes, rows };
   }
 
-  /* ---------- fit ---------- */
+  /* ---------- fit ----------
+     Non-negative least squares, re-weighted (Huber) so a few bad readings or board changes don't drag the answer. */
+  function median(a) { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; }
+  function robustFit(obs) {
+    const X = obs.map((o) => o.x.concat([o.n])), y = obs.map((o) => o.use);
+    let w = obs.map(() => 1), b = null;
+    for (let it = 0; it < 8; it++) {
+      const sw = w.map(Math.sqrt);
+      b = nnls(X.map((r, i) => r.map((v) => v * sw[i])), y.map((v, i) => v * sw[i]));
+      const res = X.map((r, i) => (y[i] - r.reduce((s, v, j) => s + v * b[j], 0)) / obs[i].n);
+      const k = 1.345 * Math.max(0.8, 1.4826 * median(res.map(Math.abs)));
+      w = res.map((r) => (Math.abs(r) <= k ? 1 : k / Math.abs(r)));
+    }
+    return b;
+  }
+  const dot = (r, b) => r.reduce((s, v, j) => s + v * b[j], 0);
+
   function fit(obs) {
     const X = obs.map((o) => o.x.concat([o.n])), y = obs.map((o) => o.use);
     const n = obs.length;
-    if (n < 4) return { ok: false, n, coef: new Array(NF).fill(0), base: 8.8, rmse: 1.5, loo: 1.5, r2: 0, corr: [] };
-    const b = nnls(X, y);
-    const pred = X.map((row) => row.reduce((s, v, j) => s + v * b[j], 0));
-    const perDay = (arr) => arr.map((v, i) => v / obs[i].n);
-    const yd = perDay(y), pd = perDay(pred), mean = yd.reduce((s, v) => s + v, 0) / n;
+    if (n < 4) return { ok: false, n, coef: new Array(NF).fill(0), base: 8.8, rmse: 1.5, loo: 1.5, sigma: 1.5, r2: 0, corr: [], pred: [], perDayMean: 8.8, outliers: [] };
+    const b = robustFit(obs);
+    const pred = X.map((row) => dot(row, b));
+    const yd = y.map((v, i) => v / obs[i].n), pd = pred.map((v, i) => v / obs[i].n), mean = yd.reduce((s, v) => s + v, 0) / n;
     const sse = yd.reduce((s, v, i) => s + (v - pd[i]) ** 2, 0), sst = yd.reduce((s, v) => s + (v - mean) ** 2, 0);
-    let loo = 0;
+    const looRes = [];
     for (let i = 0; i < n; i++) {
-      const Xi = X.filter((_, k) => k !== i), yi = y.filter((_, k) => k !== i), bb = nnls(Xi, yi);
-      const pi = X[i].reduce((s, v, j) => s + v * bb[j], 0);
-      loo += ((y[i] - pi) / obs[i].n) ** 2;
+      const tr = obs.filter((_, k) => k !== i), bb = robustFit(tr);
+      looRes.push((y[i] - dot(X[i], bb)) / obs[i].n);
     }
+    const looAbs = looRes.map(Math.abs);
     const corr = FEATURES.map((f, k) => {
-      const xs = obs.map((o) => o.x[k] / o.n);
-      const mx = xs.reduce((s, v) => s + v, 0) / n;
+      const xs = obs.map((o) => o.x[k] / o.n), mx = xs.reduce((s, v) => s + v, 0) / n;
       let sxy = 0, sxx = 0, syy = 0;
       xs.forEach((v, i) => { sxy += (v - mx) * (yd[i] - mean); sxx += (v - mx) ** 2; syy += (yd[i] - mean) ** 2; });
       return sxx && syy ? sxy / Math.sqrt(sxx * syy) : 0;
     });
-    return { ok: true, n, coef: b.slice(0, NF), base: b[NF], rmse: Math.sqrt(sse / n), loo: Math.sqrt(loo / n),
-             r2: sst ? 1 - sse / sst : 0, corr, pred, perDayMean: mean };
+    const outliers = obs.map((o, i) => ({ o, i, res: yd[i] - pd[i] })).filter((q) => Math.abs(q.res) > 3.5)
+      .sort((a, c) => Math.abs(c.res) - Math.abs(a.res)).slice(0, 6).map((q) => ({ d: q.o.d, days: q.o.days, use: yd[q.i], pred: pd[q.i] }));
+    return { ok: true, n, coef: b.slice(0, NF), base: b[NF], rmse: Math.sqrt(sse / n), loo: median(looAbs), sigma: Math.max(0.8, 1.4826 * median(looAbs)),
+             r2: sst ? 1 - sse / sst : 0, corr, pred, perDayMean: mean, outliers };
   }
 
   function predictDay(model, rec) {
@@ -114,7 +145,7 @@
      cfg: { floor, loadPct, maxFill, lead, allowedDows:[1..5], z }                                                   */
   function simulate(opts) {
     const { start, startLevel, days, model, cfg } = opts;     // days: [{ d, rec }]
-    const sigma = Math.max(0.6, model.loo || model.rmse || 1);
+    const sigma = Math.max(0.6, model.sigma || model.loo || model.rmse || 1);
     const use = days.map((x) => {
       const p = predictDay(model, x.rec);
       if (x.frac != null && x.frac < 1) p.total = Math.max(0.1, p.total * x.frac);   // day already part-way through

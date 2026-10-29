@@ -79,6 +79,7 @@
 
   /* ---------- derived numbers ---------- */
   let C = null;
+  const cfgLoadPct = () => S().load / S().cap * 100;
   function compute() {
     const set = S();
     const q = M.observations(state.readings, state.board);
@@ -108,9 +109,14 @@
 
     // deliveries already received: estimate size = observed rise + the use that happened over the same days
     const meanUse = model.perDayMean || 8.8;
+    const amOn = {}; rows.forEach((r) => { if (r.am !== null) amOn[r.d] = r.am; });
+    const pmOn = {}; rows.forEach((r) => { if (r.pm !== null) pmOn[r.d] = r.pm; });
     const past = q.deliveries.map((x) => {
-      const pts = x.rise + x.days * meanUse;
-      return { ...x, pts, t: tn(pts) };
+      const before = pmOn[x.from];
+      // morning reading already above last night's level = it was taken after the truck: size is read straight off the gauge
+      const pts = amOn[x.d] !== undefined && amOn[x.d] > before + 3 ? amOn[x.d] - before : x.rise + x.days * meanUse;
+      const full = cfgLoadPct(), short = pts < full * 0.85 && before + pts < set.maxFill - 5;   // a load that stopped at max fill is not "short"
+      return { ...x, pts, t: tn(pts), before, short };
     });
 
     // history of single/multi-day observed use, for the fit chart
@@ -184,7 +190,7 @@
     }
     const gauge = vesselSVG(C.startLevel);
     const next7 = sim.rows.slice(0, 7); const avg7 = next7.length ? next7.reduce((s, r) => s + r.use, 0) / next7.length : 0;
-    const err = Math.max(0.6, C.model.loo || C.model.rmse);
+    const err = Math.max(0.6, C.model.sigma || C.model.loo || C.model.rmse);
     return `${banners}
     <section class="sec" id="plan">
       <div class="sec-head"><div><span class="eyebrow">Delivery plan</span><h2>When do we need CO2?</h2>
@@ -229,7 +235,7 @@
   let tips = {};
   function levelChart() {
     const W = 960, H = 380, L = 46, R = 20, T = 20, B = 38;
-    const hist = C.q.rows, first = hist.length ? hist[0].d : C.startDate, last = C.end;
+    const first0 = M.addDays(C.startDate, -28), hist = C.q.rows.filter((r) => r.d >= first0), first = hist.length ? hist[0].d : C.startDate, last = C.end;
     const t0 = M.parse(first), t1 = M.parse(last) + 864e5;
     const x = (d, f) => L + ((M.parse(d) + f * 864e5) - t0) / (t1 - t0) * (W - L - R);
     const y = (v) => T + (1 - Math.max(0, Math.min(100, v)) / 100) * (H - T - B);
@@ -329,8 +335,7 @@
   /* ---------- drivers ---------- */
   function driversChart() {
     const W = 960, H = 330, L = 46, R = 20, T = 18, B = 38;
-    const firstObs = C.hist.length ? C.hist[0].days[0] : C.startDate;
-    const first = firstObs < C.startDate ? M.addDays(firstObs, -0) : C.startDate, last = C.end;
+    const first = M.addDays(C.startDate, -28), last = C.end;
     const days = M.range(first, last), n = days.length, bw = (W - L - R) / n;
     const actual = {}; C.hist.forEach((o) => o.days.forEach((d) => (actual[d] = o.use / o.n)));
     const parts = (d) => {
@@ -370,6 +375,8 @@
         <div style="display:flex;gap:10px;align-items:center"><div class="rbar${r < 0 ? ' neg' : ''}" style="flex:1"><span style="width:${Math.min(100, Math.abs(r) * 100).toFixed(0)}%"></span></div><span class="num" style="font-size:12px;width:46px;text-align:right">r = ${r.toFixed(2)}</span></div>
         <div class="eff">${effText(k)}</div></div>`;
     }).join('');
+    const strong = M.FEATURES.filter((f, k) => m.ok && m.corr[k] >= 0.25 && m.coef[k] > 0.02).map((f) => f.label.toLowerCase());
+    const weak = M.FEATURES.filter((f, k) => m.ok && !(m.corr[k] >= 0.25 && m.coef[k] > 0.02)).map((f) => f.label.toLowerCase());
     const histRows = C.hist.slice().reverse().map((o) => {
       const d = o.use / o.n, p = o.pred / o.n, diff = d - p;
       return `<tr><td>${o.n > 1 ? fmtS(o.days[0]) + ' – ' + fmtS(o.d) : fmtD(o.d)}</td><td class="r num">${o.x.slice(0, 3).map((v) => v).join(' / ')}</td><td class="r num">${(o.x[3]).toFixed(1)}k</td><td class="r num">${Math.round(o.x[4] * 100)}</td><td class="r num">${d.toFixed(1)}</td><td class="r num">${p.toFixed(1)}</td><td class="r num" style="color:${Math.abs(diff) > 1.5 ? '#000' : 'var(--muted)'};font-weight:${Math.abs(diff) > 1.5 ? 700 : 400}">${diff > 0 ? '+' : ''}${diff.toFixed(1)}</td></tr>`;
@@ -386,11 +393,11 @@
         <div class="panel">
           <div class="kpis" style="grid-template-columns:repeat(2,minmax(0,1fr))">
             <div class="kpi"><small>Fit (R²)</small><b>${m.ok ? m.r2.toFixed(2) : '–'}</b><p>Share of day-to-day swing explained by the board</p></div>
-            <div class="kpi"><small>Typical miss</small><b>± ${m.ok ? m.loo.toFixed(1) : '–'} pts</b><p>≈ ${m.ok ? (m.loo * set.cap / 100).toFixed(1) : '–'} t a day, tested on days the model hadn't seen</p></div>
+            <div class="kpi"><small>Typical miss</small><b>± ${m.ok ? m.sigma.toFixed(1) : '–'} pts</b><p>≈ ${m.ok ? (m.sigma * set.cap / 100).toFixed(1) : '–'} t a day, tested on days the model hadn't seen</p></div>
             <div class="kpi"><small>Days used</small><b>${m.n}</b><p>Observation periods with a clean reading at each end</p></div>
             <div class="kpi"><small>Average draw</small><b>${m.ok ? fT(m.perDayMean) : '–'}</b><p>${m.ok ? fP(m.perDayMean) + ' of the vessel per day' : ''}</p></div>
           </div>
-          <div class="note" style="padding-top:0"><b>Reading this honestly:</b> cartons and 500HL transfers are the clear drivers. 70HL and 300HL transfers and kegs are too small or too irregular to separate out from only ${m.n} periods — they will sharpen as more readings are added. Brite CIPs are not on the board, so they sit in the base load and are the main source of the ± above.</div>
+          <div class="note" style="padding-top:0"><b>Reading this honestly:</b> ${strong.length ? strong.join(', ') + (strong.length > 1 ? ' are' : ' is') + ' the clearest signal' + (strong.length > 1 ? 's' : '') + '.' : 'No single driver stands out yet.'} ${weak.length ? weak.join(' and ') + ' show' + (weak.length > 1 ? '' : 's') + ' little effect so far — too small or too irregular to separate out.' : ''} Brite CIPs are not on the board, so they sit in the base load and are the main source of the ± above. Fitted on ${m.n} periods since ${C.hist.length ? fmtS(C.hist[0].days[0]) : '–'}; a few odd days are down-weighted automatically and listed under Data checks.</div>
         </div>
       </div>
       <div class="panel" style="margin-top:14px">
@@ -413,11 +420,12 @@
       return `<tr><td class="sticky-col">${fmtD(r.d)}</td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.am === null ? '' : r.am}" data-d="${r.d}" data-f="am" aria-label="Morning level ${r.d}"></td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.pm === null ? '' : r.pm}" data-d="${r.d}" data-f="pm" aria-label="Evening level ${r.d}"></td>
-        <td>${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.t < set.load * 0.85 ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.t < set.load * 0.85 ? ' — short load?' : ''}</span>` : ''}</td>
+        <td>${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.short ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.short ? ' — short load?' : ''}</span>` : ''}</td>
         <td class="r"><button class="btn small x" data-act="delReading" data-d="${r.d}" aria-label="Delete reading ${r.d}">×</button></td></tr>`;
     }).join('');
-    const notes = C.q.notes.map((n) => `<li><b>${fmtS(n.d)}:</b> ${esc(n.text)}</li>`).join('');
-    const pastNotes = C.past.filter((x) => x.t < set.load * 0.85).map((x) => `<li><b>${fmtS(x.d)}:</b> the level rose about ${fT(x.pts)}, less than a ${set.load} t load — was this a short delivery?</li>`).join('');
+    const outNotes = C.model.outliers.map((o) => `<li><b>${o.days.length > 1 ? fmtS(o.days[0]) + '–' + fmtS(o.d) : fmtS(o.d)}:</b> measured ${o.use.toFixed(1)} pts/day but the board predicts ${o.pred.toFixed(1)} — worth checking that day's readings or whether the plan changed.</li>`).join('');
+    const notes = outNotes + C.q.notes.map((n) => `<li><b>${fmtS(n.d)}:</b> ${esc(n.text)}</li>`).join('');
+    const pastNotes = C.past.filter((x) => x.short).map((x) => `<li><b>${fmtS(x.d)}:</b> the level rose about ${fT(x.pts)} (${fP(x.before, 0)} → ${fP(x.before + x.pts, 0)}), well short of a ${set.load} t load that fits — was this a short delivery?</li>`).join('');
     const boardMsg = C.lastBoard ? `Board loaded to <b>${fmtD(C.lastBoard)}</b>; transfers planned to <b>${C.boardEnd ? fmtD(C.boardEnd) : 'none'}</b>.` : 'No board loaded.';
     return `<section class="sec" id="readings">
       <div class="sec-head"><div><span class="eyebrow">Data</span><h2>Daily readings</h2>
