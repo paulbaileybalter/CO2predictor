@@ -152,12 +152,13 @@
       return p;
     });
     const allowed = (d) => cfg.allowedDows.includes(dow(d));
-    const del = new Map();
+    const del = new Map(), orderMap = new Map();
+    (opts.orders || []).forEach((o) => { if (o.i >= 0 && o.i < days.length) { del.set(o.i, o.pts); orderMap.set(o.i, o); } });
     const run = (withDeliveries) => {
       let lvl = startLevel; const rows = [];
       days.forEach((x, i) => {
         let add = 0;
-        if (withDeliveries && del.has(i)) add = Math.min(cfg.loadPct, Math.max(0, cfg.maxFill - lvl));
+        if (withDeliveries && del.has(i)) add = Math.min(typeof del.get(i) === 'number' ? del.get(i) : cfg.loadPct, Math.max(0, cfg.maxFill - lvl));
         const s = lvl + add, e = s - use[i].total, k = i + 1;
         rows.push({ d: x.d, s, e, add, use: use[i].total, parts: use[i].parts,
                     lo: e - cfg.z * sigma * Math.sqrt(k), hi: Math.min(100, e + cfg.z * sigma * Math.sqrt(k)) });
@@ -174,7 +175,8 @@
     let guard = 0, rows = bare;
     while (guard++ < 12) {
       rows = run(true);
-      const i = rows.findIndex((r) => r.e < cfg.floor);
+      const from = orderMap.size ? Math.min(...orderMap.keys()) : 0;      // days before the first placed order are covered by that order
+      const i = rows.findIndex((r, k) => k >= from && r.e < cfg.floor);
       if (i < 0) break;
       let j = i; while (j >= 0 && !allowed(days[j].d)) j--;
       if (j < 0 || del.has(j)) { rows[i].short = true; break; }     // cannot be fixed within the horizon
@@ -184,10 +186,13 @@
     rows.forEach((r, i) => {
       if (r.add > 0) {
         const nextNeed = rows.findIndex((q, k) => k >= i && q.e < cfg.floor + 0);
-        planned.push({ i, d: r.d, before: r.s - r.add, after: r.s, add: r.add,
-                       orderBy: addDays(r.d, -cfg.lead), partial: r.add < cfg.loadPct - 0.5 });
+        const ord = orderMap.get(i);
+        planned.push({ i, d: r.d, before: r.s - r.add, after: r.s, add: r.add, lowBefore: i > 0 ? rows[i - 1].lo : startLevel,
+                       orderBy: addDays(r.d, -cfg.lead), partial: r.add < (ord ? ord.pts : cfg.loadPct) - 0.5, ordered: !!ord, order: ord ? ord.ref : null });
       }
     });
+    const lastOrdered = planned.filter((x) => x.ordered).map((x) => x.d).sort().pop();
+    planned.forEach((x) => { if (!x.ordered && lastOrdered && x.d < lastOrdered) x.tooLate = true; });   // a suggested load that has to land before an order already placed
     return { rows, bare, use, sigma, planned, iFloor, iFloorLo, iEmpty, iFits,
              floorDate: iFloor >= 0 ? days[iFloor].d : null, floorDateLo: iFloorLo >= 0 ? days[iFloorLo].d : null,
              emptyDate: iEmpty >= 0 ? days[iEmpty].d : null, fitsDate: iFits >= 0 ? days[iFits].d : null,

@@ -36,6 +36,9 @@
     if (!Array.isArray(s.invoices)) s.invoices = seedInv.map((x) => ({ ...x }));
     else if (s.invNeedsSeed) { const m = new Map(s.invoices.map((x) => [x.date + '|' + x.docket, x])); seedInv.forEach((x) => m.set(x.date + '|' + x.docket, { ...x })); s.invoices = [...m.values()]; }
     delete s.invNeedsSeed;
+    const seedOrders = (window.SEED && window.SEED.orders) || [];
+    if (!Array.isArray(s.orders)) s.orders = [];
+    if (s.invNeedsSeed || !s.seededOrders) { seedOrders.forEach((o) => { if (!s.orders.some((x) => x.id === o.id)) s.orders.push({ ...o }); }); s.seededOrders = true; }
     s.settings = { ...DEFAULTS, ...(s.settings || {}) };
     s.overrides = s.overrides || {};
     return s;
@@ -109,7 +112,10 @@
     };
     const days = M.range(startDate, end).map((d, i) => ({ d, rec: recFor(d), frac: i === 0 ? frac0 : 1 }));
     const cfg = { floor: set.floor, loadPct: set.load / set.cap * 100, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
-    const sim = M.simulate({ startLevel, days, model, cfg });
+    const kgPt0 = set.cap * 10;
+    const orderArr = (o) => (o.when === 'night' ? M.addDays(o.date, 1) : o.date);
+    const orders = state.orders.map((o) => ({ i: days.findIndex((x) => x.d === orderArr(o)), pts: Math.max(0, o.t) * 1000 / kgPt0, ref: o })).filter((o) => o.i >= 0);
+    const sim = M.simulate({ startLevel, days, model, cfg, orders });
 
     // deliveries already received: estimate size = observed rise + the use that happened over the same days
     const meanUse = model.perDayMean || 8.8;
@@ -135,11 +141,56 @@
   function nextStatus() {
     const p = C.sim.planned[0];
     if (!p) return { st: 'ok', text: 'No delivery needed in the planning window', p: null };
+    if (p.ordered) {
+      const lo = p.lowBefore, nx = C.sim.planned.find((x) => !x.ordered);
+      const more = nx ? ` Next load to order: ${fmtD(nx.d)} — order by ${fmtD(nx.orderBy)}.` : '';
+      if (p.before < 0.5) return { st: 'risk', text: `Order placed, but the vessel is forecast to run dry before it arrives.${more}`, p };
+      if (lo < 3 || C.sim.planned.some((x) => x.tooLate)) return { st: 'risk', text: `Order placed — but in a heavy-use case the vessel could be nearly empty (${fP(Math.max(0, lo), 0)}) when it arrives.${more}`, p };
+      if (p.before < S().floor) return { st: 'watch', text: `Order placed — arrives with ≈${fP(p.before)} left, under your ${S().floor}% floor.${more}`, p };
+      return { st: 'ok', text: `Order placed — arrives with ≈${fP(p.before, 0)} (${fT(p.before)}) left.${more}`, p };
+    }
     const left = M.diffDays(TODAY, p.orderBy);
     if (left < 0) return { st: 'risk', text: `Order was due ${fmtD(p.orderBy)} — call the supplier now`, p };
     if (left === 0) return { st: 'order', text: 'Place the order today', p };
     if (left <= 2) return { st: 'watch', text: `Place the order ${left === 1 ? 'tomorrow' : 'in 2 days'} (${fmtD(p.orderBy)})`, p };
     return { st: 'ok', text: `Place the order by ${fmtD(p.orderBy)}`, p };
+  }
+
+
+  /* ---------- quick add ---------- */
+  let quickType = null, quickDateTouched = false;
+  const defaultType = () => { const h = new Date().getHours(); return h < 11 ? 'am' : h < 17 ? 'cur' : 'pm'; };
+  const defaultDate = (t) => (t === 'pm' && new Date().getHours() < 12 ? M.addDays(TODAY, -1) : TODAY);
+  function renderQuick() {
+    const t = quickType || defaultType();
+    const seg = (k, label) => `<button type="button" class="seg${t === k ? ' on' : ''}" data-act="qType" data-t="${k}">${label}</button>`;
+    return `<div class="panel quick" id="quick">
+      <div class="quick-in">
+        <div><span class="eyebrow">Add a reading</span><div class="segs">${seg('am', 'Morning')}${seg('pm', 'Evening')}${seg('cur', 'Live now')}</div></div>
+        <label class="fld"><span>Gauge level %</span><input type="number" id="qVal" step="0.1" min="0" max="100" inputmode="decimal" placeholder="e.g. 44.2"></label>
+        <label class="fld"><span>Date</span><input type="date" id="qDate" value="${defaultDate(t)}"></label>
+        <label class="fld" id="qTimeWrap" style="${t === 'cur' ? '' : 'display:none'}"><span>Time</span><input type="time" id="qTime" value="${nowHM()}"></label>
+        <button class="btn teal" data-act="quickSave">Save reading</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Morning and evening are the handover levels. “Live now” is a mid-day check — the forecast then counts only the rest of today's use.</p>
+    </div>`;
+  }
+
+
+  function renderUpdateRow() {
+    const when = state.boardUpdated ? new Date(state.boardUpdated.at).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
+    const status = C.lastBoard
+      ? `Board covers <b>${fmtS(Object.keys(state.board).sort()[0])} → ${fmtD(C.lastBoard)}</b>; transfers planned to <b>${C.boardEnd ? fmtD(C.boardEnd) : 'none'}</b>.${when ? ' Last updated ' + when + '.' : ''}`
+      : 'No board loaded yet.';
+    return `<div class="updates">
+      ${renderQuick()}
+      <div class="panel drop" id="drop" tabindex="0" role="button" aria-label="Drop the Live Brewery Board spreadsheet here, or press Enter to choose a file">
+        <span class="eyebrow">Update the plan</span>
+        <div class="drop-title">Drop the latest Live Brewery Board here</div>
+        <p class="muted" style="font-size:12.5px;margin:4px 0 0">or click to choose the .xlsx file. The forecast recalculates straight away. (A CO2 handover sheet dropped here is imported as readings.)</p>
+        <p class="drop-status" style="font-size:12px;margin:10px 0 0">${status}</p>
+      </div>
+    </div>`;
   }
 
   /* ---------- hero ---------- */
@@ -183,9 +234,10 @@
     let when, relTxt, list;
     if (p) {
       when = fmtD(p.d); relTxt = rel(p.d);
+      const ordLine = p.ordered ? `<li><b>Order</b><span>Placed ${p.order.placed ? fmtD(p.order.placed) : ''} for ${fmtD(p.order.date)} ${p.order.when === 'night' ? 'night' : 'early morning'} <span class="muted">(${(+p.order.t).toFixed(0)} t)</span></span></li>` : `<li><b>Order by</b><span>${fmtD(p.orderBy)} <span class="muted">(${plural(set.lead, 'day')} notice)</span></span></li>`;
       list = `
-        <li><b>Order by</b><span>${fmtD(p.orderBy)} <span class="muted">(${plural(set.lead, 'day')} notice)</span></span></li>
-        <li><b>Load</b><span>${fT(p.add)} <span class="muted">${p.partial ? '— only part of a load fits' : '— a full 20 t load fits'}</span></span></li>
+        ${ordLine}
+        <li><b>Load</b><span>${fT(p.add)} <span class="muted">${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full 20 t load fits'}</span></span></li>
         <li><b>Level on arrival</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
         <li><b>Hits ${set.floor}% floor</b><span>${sim.floorDate ? fmtD(sim.floorDate) : 'not in window'}${sim.floorDateLo && sim.floorDateLo < sim.floorDate ? ` <span class="muted">(as early as ${fmtD(sim.floorDateLo)})</span>` : ''}</span></li>
         <li><b>Runs dry if none</b><span>${sim.emptyDate ? fmtD(sim.emptyDate) : 'not in window'}</span></li>`;
@@ -202,11 +254,12 @@
         <p>Forecast from the latest vessel reading and the Live Brewery Board. Transfers and packaging set the daily draw; deliveries are kept to your accepted days.</p></div></div>
       <div class="hero">
         <div class="next st-${ns.st}">
-          <span class="eyebrow">Next delivery</span>
+          <span class="eyebrow">${p && p.ordered ? 'Next delivery · ordered' : 'Next delivery'}</span>
           <div class="when">${when}</div>
           <span class="rel">${relTxt}</span>
           <ul>${list}</ul>
           <div class="ask">${esc(ns.text)}</div>
+          ${p && !p.ordered ? `<div style="margin-top:10px"><button class="btn small" data-act="logOrder" data-d="${p.d}">I've placed this order</button></div>` : ''}
         </div>
         <div class="panel gauge-panel">
           <div>${gauge}</div>
@@ -218,7 +271,9 @@
           </div>
         </div>
       </div>
+      ${renderUpdateRow()}
       ${renderSchedule()}
+      ${renderOrders()}
     </section>`;
   }
 
@@ -226,13 +281,35 @@
     const pl = C.sim.planned;
     const rows = pl.map((x, i) => {
       const left = M.diffDays(TODAY, x.orderBy);
-      const chip = left < 0 ? '<span class="chip st-risk"><i></i>Overdue</span>' : left === 0 ? '<span class="chip st-order"><i></i>Order today</span>' : left <= 2 ? '<span class="chip st-watch"><i></i>Soon</span>' : '<span class="chip st-ok"><i></i>On track</span>';
-      return `<tr><td>${i + 1}</td><td class="sticky-col2"><b>${fmtD(x.d)}</b><small>${rel(x.d)}</small></td><td>${fmtD(x.orderBy)}</td><td class="r num">${fP(x.before)}<small>${fT(x.before)}</small></td><td class="r num">${fP(x.after)}<small>${fT(x.after)}</small></td><td class="r num">${fT(x.add)}${x.partial ? '<small>part load</small>' : ''}</td><td>${chip}</td></tr>`;
+      const chip = x.ordered ? `<span class="chip st-ok"><i></i>Ordered</span>${x.before < S().floor ? ' <span class="chip st-watch"><i></i>Low on arrival</span>' : ''}` : x.tooLate ? '<span class="chip st-risk"><i></i>Needed before your order lands</span>' : left < 0 ? '<span class="chip st-risk"><i></i>Overdue</span>' : left === 0 ? '<span class="chip st-order"><i></i>Order today</span>' : left <= 2 ? '<span class="chip st-watch"><i></i>Soon</span>' : '<span class="chip st-ok"><i></i>On track</span>';
+      return `<tr><td>${i + 1}</td><td class="sticky-col2"><b>${fmtD(x.d)}</b><small>${rel(x.d)}${x.ordered && x.order.when === 'night' ? ' · ordered for ' + fmtS(x.order.date) + ' night' : ''}</small></td><td>${x.ordered ? 'Placed' + (x.order.placed ? ' ' + fmtS(x.order.placed) : '') : fmtD(x.orderBy)}</td><td class="r num">${fP(x.before)}<small>${fT(x.before)}</small></td><td class="r num">${fP(x.after)}<small>${fT(x.after)}</small></td><td class="r num">${fT(x.add)}${x.partial ? '<small>part load</small>' : ''}</td><td>${chip}</td></tr>`;
     }).join('');
     return `<div class="panel" style="margin-top:14px">
       <div class="pad" style="padding-bottom:6px"><b>Delivery schedule to ${fmtD(C.end)}</b> <span class="muted" style="font-size:12px">· assumes each load lands on the day shown and the plan on the board is followed</span></div>
       ${pl.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Deliver on</th><th>Order by</th><th class="r">Level before</th><th class="r">Level after</th><th class="r">Load</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="pad muted" style="font-size:13px">No deliveries needed before ${fmtD(C.end)} — the vessel stays above the ${S().floor}% floor.</div>`}
       <div class="note" style="padding-top:10px">Where the board has no transfers entered yet (${C.boardEnd && C.lastBoard > C.boardEnd ? 'after ' + fmtS(C.boardEnd) : 'beyond the last planned week'}) the forecast stops, because transfers are the biggest swing in daily use.</div>
+    </div>`;
+  }
+
+
+  /* ---------- orders ---------- */
+  function renderOrders() {
+    const set = S();
+    const arr = (o) => (o.when === 'night' ? M.addDays(o.date, 1) : o.date);
+    const list = state.orders.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((o) => {
+      const gone = arr(o) < C.startDate;
+      return `<tr class="${gone ? 'hist' : ''}"><td class="sticky-col">${fmtD(o.date)}</td><td>${o.when === 'night' ? 'Overnight (lands early ' + fmtS(M.addDays(o.date, 1)) + ')' : 'Early morning'}</td><td class="r num">${(+o.t).toFixed(1)} t</td><td>${o.placed ? fmtD(o.placed) : ''}</td><td>${esc(o.note || '')}</td><td>${gone ? '<span class="chip plain"><i></i>Should have arrived</span>' : '<span class="chip st-ok"><i></i>Counted in forecast</span>'}</td><td class="r"><button class="btn small x" data-act="delOrder" data-id="${esc(o.id)}" aria-label="Delete order">×</button></td></tr>`;
+    }).join('');
+    return `<div class="panel" style="margin-top:14px" id="orders">
+      <div class="pad" style="padding-bottom:6px"><b>Orders placed with Supagas</b> <span class="muted" style="font-size:12px">· a logged order is treated as arriving; the forecast then plans the load after it</span></div>
+      <div class="pad" style="padding-top:6px"><div class="form-row">
+        <label class="fld"><span>Delivery date</span><input type="date" id="orDate"></label>
+        <label class="fld"><span>Truck arrives</span><select id="orWhen"><option value="night">Overnight (lands early next morning)</option><option value="am">Early morning of that date</option></select></label>
+        <label class="fld" style="min-width:90px"><span>Quantity (t)</span><input type="number" id="orT" step="0.1" min="1" value="${set.load}"></label>
+        <label class="fld"><span>Order placed</span><input type="date" id="orPlaced" value="${TODAY}"></label>
+        <label class="fld" style="flex:1;min-width:150px"><span>Note (optional)</span><input type="text" id="orNote" placeholder="PO / confirmation no."></label>
+        <button class="btn teal" data-act="addOrder">Log order</button></div></div>
+      ${list ? `<div class="tbl-wrap"><table><thead><tr><th>Delivery date</th><th>Arrival</th><th class="r">Quantity</th><th>Placed</th><th>Note</th><th>Status</th><th></th></tr></thead><tbody>${list}</tbody></table></div>` : '<div class="note" style="padding-top:0">No orders logged yet.</div>'}
     </div>`;
   }
 
@@ -287,9 +364,9 @@
     // planned deliveries
     sim.planned.forEach((p) => {
       const cx = x(p.d, FA), cy = y(p.after);
-      g += `<path d="M${cx},${cy - 9} l8,9 -8,9 -8,-9 z" fill="#FDAA63" stroke="#000" stroke-width="1.5"/>`;
+      g += `<path d="M${cx},${cy - 9} l8,9 -8,9 -8,-9 z" fill="${p.ordered ? '#7566A0' : '#FDAA63'}" stroke="#000" stroke-width="1.5"/>`;
       const anchor = cx > W - 140 ? 'end' : 'start';
-      g += `<text class="lbl" x="${cx + (anchor === 'end' ? -12 : 12)}" y="${cy - 12}" text-anchor="${anchor}">Deliver ${fmtD(p.d)}</text>`;
+      g += `<text class="lbl" x="${cx + (anchor === 'end' ? -12 : 12)}" y="${cy - 12}" text-anchor="${anchor}">${p.ordered ? 'Ordered' : 'Deliver'} ${fmtD(p.d)}</text>`;
     });
     // today
     if (TODAY >= first && TODAY <= last) g += `<line x1="${x(TODAY, 0.5)}" x2="${x(TODAY, 0.5)}" y1="${T}" y2="${H - B}" stroke="#000" stroke-width="1"/><text class="lbl" x="${x(TODAY, 0.5) + 5}" y="${T + 9}">Today</text>`;
@@ -326,7 +403,7 @@
         <p>Black line = readings, purple dashed = forecast with its 90% range (blue). Change any number in the table below to test a what-if; it recalculates straight away.</p></div></div>
       <div class="panel">
         <div class="chart-wrap" id="lvlWrap">${levelChart()}<div class="tip" id="tip"></div></div>
-        <div class="legend"><span><i class="line"></i>Readings</span><span><i class="dash" style="border-top-color:#7566A0"></i>Forecast</span><span><i style="background:#99D6EA"></i>90% range</span><span><i style="background:#FDAA63"></i>Planned delivery</span><span><i style="background:#47D7AC"></i>Delivery received</span><span><i class="dash"></i>Reorder floor</span></div>
+        <div class="legend"><span><i class="line"></i>Readings</span><span><i class="dash" style="border-top-color:#7566A0"></i>Forecast</span><span><i style="background:#99D6EA"></i>90% range</span><span><i style="background:#7566A0"></i>Ordered</span><span><i style="background:#FDAA63"></i>Suggested delivery</span><span><i style="background:#47D7AC"></i>Delivery received</span><span><i class="dash"></i>Reorder floor</span></div>
       </div>
       <div class="panel" style="margin-top:14px">
         <div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between"><div><b>Plan &amp; predicted use</b> <span class="muted" style="font-size:12px">· transfers counted per tank, cartons and kegs from the board</span></div>
@@ -669,6 +746,8 @@
     }
   });
 
+  app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.closest('#quick')) { e.preventDefault(); app.querySelector('[data-act=quickSave]').click(); } });
+  app.addEventListener('input', (e) => { if (e.target.id === 'qDate') quickDateTouched = true; });
   app.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]'); if (!b) return;
     const a = b.dataset.act;
@@ -695,6 +774,31 @@
       const lines = [head.join(',')].concat(C.inv.out.map((x) => [x.date, q(x.docket), x.kg, x.ex.toFixed(2), x.rate.toFixed(4), x.gaugeKg === null ? '' : Math.round(x.gaugeKg), x.diff === null ? '' : Math.round(x.diff), q(STATUS[x.status][1]), q(x.note)].join(',')));
       const el = document.createElement('a'); el.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); el.download = 'balter-co2-invoices-vs-gauge.csv'; el.click(); setTimeout(() => URL.revokeObjectURL(el.href), 2000);
     }
+    else if (a === 'qType') {
+      quickType = b.dataset.t;
+      app.querySelectorAll('#quick .seg').forEach((x) => x.classList.toggle('on', x === b));
+      $('#qTimeWrap').style.display = quickType === 'cur' ? '' : 'none';
+      if (!quickDateTouched) $('#qDate').value = defaultDate(quickType);
+      $('#qVal').focus();
+    } else if (a === 'quickSave') {
+      const t = quickType || defaultType(), v = num($('#qVal').value), d = $('#qDate').value;
+      if (!d) return toast('Pick a date');
+      if (v === null || v < 0 || v > 100) return toast('Enter the gauge level as a percentage (0–100)');
+      if (t === 'am') setReading(d, 'am', v); else if (t === 'pm') setReading(d, 'pm', v); else setReading(d, 'cur', { v, h: $('#qTime').value || nowHM() });
+      quickDateTouched = false; save(); render();
+      const p = nextStatus().p;
+      toast(`Saved ${t === 'am' ? 'morning' : t === 'pm' ? 'evening' : 'live'} reading ${v}% for ${fmtD(d)}.${p ? ' Next delivery: ' + fmtD(p.d) + '.' : ' No delivery needed in the window.'}`);
+    }
+    else if (a === 'addOrder') {
+      const d = $('#orDate').value, t = num($('#orT').value);
+      if (!d) return toast('Pick the delivery date');
+      if (!t || t <= 0) return toast('Enter the quantity in tonnes');
+      state.orders.push({ id: 'o' + Date.now(), date: d, when: $('#orWhen').value, t, placed: $('#orPlaced').value || TODAY, note: $('#orNote').value.trim() });
+      save(); render(); toast(`Order logged for ${fmtD(d)}`);
+    } else if (a === 'logOrder') {
+      state.orders.push({ id: 'o' + Date.now(), date: b.dataset.d, when: 'am', t: S().load, placed: TODAY, note: '' });
+      save(); render(); toast(`Order logged for ${fmtD(b.dataset.d)}`);
+    } else if (a === 'delOrder') { state.orders = state.orders.filter((o) => o.id !== b.dataset.id); save(); render(); }
     else if (a === 'resetOv') { state.overrides = {}; save(); render(); toast('Plan changes cleared'); }
     else if (a === 'pickCo2') $('#co2File').click();
     else if (a === 'pickLbb') $('#lbbFile').click();
@@ -717,25 +821,51 @@
     } catch (err) { toast('Could not read that file: ' + err.message); }
   });
 
-  $('#lbbFile').addEventListener('change', async (e) => {
-    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
-    toast('Reading the board — this can take a few seconds…');
+  async function importSheet(f) {
+    if (!/\.(xlsx|xlsm)$/i.test(f.name)) return toast(`${f.name}: please use an Excel file (.xlsx)`);
+    toast(`Reading ${f.name} — this can take a few seconds…`);
     try {
       const wb = await readXlsx(f);
       const res = LBB.parseBoardWorkbook(wb, window.XLSX, { minDate: M.addDays(TODAY, -75) });
       const nd = Object.keys(res.days).length;
-      if (!nd) return toast('No weekly sheets recognised — expected the Live Brewery Board layout');
-      Object.assign(state.board, res.days); save(); render();
-      toast(`Board updated: ${nd} days from ${res.sheets.length} weekly sheets`);
+      if (nd) {
+        Object.assign(state.board, res.days); state.boardUpdated = { at: Date.now(), name: f.name };
+        save(); render();
+        const wk = Object.keys(res.days).sort().pop();
+        return toast(`Board updated from ${f.name}: ${nd} days, through ${fmtD(wk)}`);
+      }
+      const rows = LBB.parseCo2Workbook(wb, window.XLSX, +TODAY.slice(0, 4));
+      if (rows.length) {
+        const map = new Map(state.readings.map((r) => [r.d, r])); rows.forEach((r) => map.set(r.d, r));
+        state.readings = [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1)); save(); render();
+        return toast(`Imported ${rows.length} days of CO2 readings from ${f.name}`);
+      }
+      toast(`${f.name}: neither a Live Brewery Board nor a CO2 handover sheet that I recognise`);
     } catch (err) { toast('Could not read that file: ' + err.message); }
+  }
+  $('#lbbFile').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importSheet(f); });
+
+  // drag and drop (the zone is re-created on every render, so listen on the page)
+  const isFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+  ['dragenter', 'dragover'].forEach((t) => window.addEventListener(t, (e) => {
+    if (!isFiles(e)) return; e.preventDefault();
+    const z = e.target.closest && e.target.closest('#drop'); const el = $('#drop'); if (el) el.classList.toggle('over', !!z);
+  }));
+  window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) { const el = $('#drop'); if (el) el.classList.remove('over'); } });
+  window.addEventListener('drop', (e) => {
+    if (!isFiles(e)) return; e.preventDefault();
+    const el = $('#drop'); if (el) el.classList.remove('over');
+    [...e.dataTransfer.files].forEach((f) => importSheet(f));          // anywhere on the page works, the zone just shows where
   });
+  app.addEventListener('click', (e) => { if (e.target.closest('#drop')) $('#lbbFile').click(); });
+  app.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.id === 'drop') { e.preventDefault(); $('#lbbFile').click(); } });
 
   $('#jsonFile').addEventListener('change', async (e) => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     try {
       const j = JSON.parse(await f.text());
       if (!Array.isArray(j.readings) || typeof j.board !== 'object') throw new Error('not a Balter CO2 export');
-      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, settings: { ...DEFAULTS, ...(j.settings || {}) } };
+      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
       save(); render(); toast('Data imported');
     } catch (err) { toast('Could not import: ' + err.message); }
   });
