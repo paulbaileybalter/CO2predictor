@@ -721,6 +721,106 @@
     return lines.join('\n');
   }
 
+
+  /* ---------- email version (inline-styled, table layout so it survives Outlook / Gmail paste) ---------- */
+  function emailHTML() {
+    const ns = nextStatus(), p = ns.p, sim = C.sim, set = S();
+    const F = "font-family:Lexend,'Segoe UI',Arial,Helvetica,sans-serif;";
+    const INK = '#000', MUTE = '#5b5b66', LINE = '#E6E3EE';
+    const eyebrow = (t, c) => `<div style="${F}font-size:11px;letter-spacing:1.2px;text-transform:uppercase;font-weight:600;color:${c || '#7566A0'};margin:0 0 4px">${t}</div>`;
+    const stCol = { ok: ['#E8FAF4', '#47D7AC'], watch: ['#FFF8D6', '#FFD637'], order: ['#FFF1E4', '#FDAA63'], risk: ['#FFF1E4', '#FDAA63'] }[ns.st] || ['#E8FAF4', '#47D7AC'];
+    const kpi = (label, val, sub, col) => `<td width="25%" valign="top" style="padding:0 4px"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-top:4px solid ${col};border-radius:10px"><tr><td style="padding:10px 12px;${F}"><div style="font-size:10.5px;letter-spacing:1px;text-transform:uppercase;font-weight:600;color:${MUTE}">${label}</div><div style="font-size:20px;font-weight:700;color:${INK};padding-top:2px">${val}</div><div style="font-size:11.5px;color:${MUTE};padding-top:2px">${sub}</div></td></tr></table></td>`;
+    const next7 = sim.rows.slice(0, 7), avg7 = next7.length ? next7.reduce((a, r) => a + r.use, 0) / next7.length : 0;
+    const err = Math.max(0.6, C.model.sigma || C.model.loo || C.model.rmse);
+
+    // next delivery card
+    let card;
+    if (p) {
+      const li = (k, v) => `<tr><td valign="top" style="padding:3px 14px 3px 0;${F}font-size:13px;font-weight:600;color:${INK};white-space:nowrap">${k}</td><td style="padding:3px 0;${F}font-size:13px;color:${INK}">${v}</td></tr>`;
+      const ordered = p.ordered ? li('Order', `Placed ${p.order.placed ? fmtD(p.order.placed) : ''} — truck ${p.order.when === 'night' ? 'overnight, landing early ' + fmtD(M.addDays(p.order.date, 1)) : 'early morning'} (${(+p.order.t).toFixed(0)} t)`) : li('Order by', `${fmtD(p.orderBy)} (${plural(set.lead, 'day')} notice)`);
+      card = `${eyebrow(p.ordered ? 'Next delivery · ordered' : 'Next delivery')}
+        <div style="${F}font-size:30px;font-weight:700;color:${INK};line-height:1.15">${fmtD(p.d)}</div>
+        <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · early-morning truck'}</div>
+        <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Load', `${fT(p.add)} ${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full load fits'}`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Runs dry if none', sim.emptyDate ? fmtD(sim.emptyDate) : 'not in window')}</table>
+        <div style="${F}font-size:13px;font-weight:600;color:${INK};padding-top:10px">${esc(ns.text)}</div>`;
+    } else card = `${eyebrow('Next delivery')}<div style="${F}font-size:26px;font-weight:700;color:${INK}">None needed</div><div style="${F}font-size:13px;color:${MUTE};padding-top:4px">The vessel stays above the ${set.floor}% floor to ${fmtD(C.end)}.</div>`;
+
+    // forecast level chart — bars built from table cells
+    const days = sim.rows.slice(0, 21), H = 120;
+    const cols = days.map((r) => {
+      const e = Math.max(0, Math.min(100, r.e)), h = Math.round(e / 100 * H), col = r.add ? '#FDAA63' : r.e < set.floor ? '#F5A08A' : '#FFD637';
+      const dd = +r.d.slice(8);
+      return `<td valign="bottom" align="center" style="padding:0 1px"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="${H - h}" style="font-size:1px;line-height:1px;height:${H - h}px">&nbsp;</td></tr><tr><td height="${h}" bgcolor="${col}" style="font-size:1px;line-height:1px;height:${h}px;background:${col};border-radius:3px 3px 0 0">&nbsp;</td></tr></table></td>`;
+    }).join('');
+    const pct = days.map((r) => `<td align="center" style="${F}font-size:9.5px;color:${INK};padding-top:3px;font-weight:600">${Math.round(r.e)}</td>`).join('');
+    const lab = days.map((r) => `<td align="center" style="${F}font-size:9px;color:${MUTE};padding-top:1px;line-height:1.25">${DOW[M.dow(r.d)].charAt(0)}<br>${+r.d.slice(8)}${r.add ? '<br><span style="color:#E0782A;font-weight:700">▲</span>' : ''}</td>`).join('');
+    const chart = days.length ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed"><tr>${cols}</tr><tr>${pct}</tr><tr>${lab}</tr></table>
+      <div style="${F}font-size:11px;color:${MUTE};padding-top:8px">End-of-day vessel level (%), forecast. <span style="color:#E0782A;font-weight:700">▲</span> = delivery day (orange bar). Bars turn pink below the ${set.floor}% floor.</div>` : '';
+
+    // schedule
+    const th = (t, r) => `<th align="${r ? 'right' : 'left'}" style="${F}font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:${MUTE};padding:6px 8px;border-bottom:2px solid ${LINE}">${t}</th>`;
+    const td = (t, r, b) => `<td align="${r ? 'right' : 'left'}" style="${F}font-size:12.5px;color:${INK};padding:7px 8px;border-bottom:1px solid ${LINE};${b ? 'font-weight:600;' : ''}">${t}</td>`;
+    const chipFor = (x) => { const left = M.diffDays(TODAY, x.orderBy); return x.ordered ? 'Ordered' + (x.before < set.floor ? ' · low on arrival' : '') : x.tooLate ? 'Needed before your order lands' : left < 0 ? 'Overdue' : left === 0 ? 'Order today' : left <= 2 ? 'Order soon' : 'On track'; };
+    const sched = sim.planned.length ? `<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${th('#')}${th('Deliver on')}${th('Order by')}${th('Level before', 1)}${th('Level after', 1)}${th('Load', 1)}${th('Status')}</tr>${sim.planned.map((x, i) => `<tr>${td(i + 1)}${td(fmtD(x.d), 0, 1)}${td(x.ordered ? 'Placed' + (x.order.placed ? ' ' + fmtS(x.order.placed) : '') : fmtD(x.orderBy))}${td(fP(x.before) + ' <span style="color:' + MUTE + '">(' + fT(x.before) + ')</span>', 1)}${td(fP(x.after), 1)}${td(fT(x.add) + (x.partial ? ' part' : ''), 1)}${td(chipFor(x))}</tr>`).join('')}</table>` : `<div style="${F}font-size:13px;color:${MUTE}">No deliveries needed before ${fmtD(C.end)}.</div>`;
+
+    // what's planned
+    const use = sim.rows.slice(0, 10), tr = (r) => { const b = state.board[r.d] || [0, 0, 0, 0, 0]; const ov = state.overrides[r.d] || []; const v = (k) => (ov[k] !== null && ov[k] !== undefined ? ov[k] : b[k]); return [v(0), v(1), v(2), v(3), v(4)]; };
+    const useTbl = `<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${th('Day')}${th('70HL', 1)}${th('300HL', 1)}${th('500HL', 1)}${th('Cartons', 1)}${th('Kegs', 1)}${th('Forecast use', 1)}${th('End level', 1)}</tr>${use.map((r) => { const q = tr(r); return `<tr>${td(fmtD(r.d), 0, 1)}${td(q[0] || '–', 1)}${td(q[1] || '–', 1)}${td(q[2] || '–', 1)}${td(q[3] ? q[3].toLocaleString('en-AU') : '–', 1)}${td(q[4] || '–', 1)}${td(fT(r.use) + ' <span style="color:' + MUTE + '">(' + fP(r.use) + ')</span>', 1)}${td(fP(r.e, 0) + (r.add ? ' <span style="color:#E0782A;font-weight:700">▲</span>' : ''), 1)}</tr>`; }).join('')}</table>`;
+
+    const box = (inner, extra) => `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-radius:12px;margin-top:14px"><tr><td style="padding:14px 16px;${extra || ''}">${inner}</td></tr></table>`;
+    const stamp = new Date().toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    return `<div style="max-width:760px;margin:0;background:#ffffff;${F}color:${INK}">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="5" bgcolor="#47D7AC" width="25%" style="height:5px;font-size:1px;line-height:1px">&nbsp;</td><td bgcolor="#FDAA63" width="25%" style="font-size:1px;line-height:1px">&nbsp;</td><td bgcolor="#7566A0" width="25%" style="font-size:1px;line-height:1px">&nbsp;</td><td bgcolor="#99D6EA" width="25%" style="font-size:1px;line-height:1px">&nbsp;</td></tr></table>
+      <table cellpadding="0" cellspacing="0" border="0" style="margin:14px 0 4px"><tr><td style="padding-right:12px"><table cellpadding="0" cellspacing="0" border="0"><tr><td width="40" height="40" align="center" bgcolor="#47D7AC" style="width:40px;height:40px;border-radius:8px;${F}font-size:22px;font-weight:700;color:#fff">B</td></tr></table></td><td>${eyebrow('Balter Brewing · Supply Planning')}<div style="${F}font-size:20px;font-weight:700;color:${INK}">CO2 Delivery Plan</div></td></tr></table>
+      <div style="${F}font-size:12px;color:${MUTE};padding-bottom:10px">Prepared ${stamp} · ${esc(C.lastLabel)} · 30 t vessel, 20 t loads</div>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${stCol[1]};border-left:6px solid ${stCol[1]};border-radius:12px;background:${stCol[0]}" bgcolor="${stCol[0]}"><tr><td style="padding:16px 18px">${card}</td></tr></table>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:14px -4px 0"><tr>${kpi('Vessel now', fT(C.startLevel) + ' <span style="font-size:12px;color:' + MUTE + ';font-weight:600">' + fP(C.startLevel) + '</span>', esc(C.lastLabel), '#FFD637')}${kpi('Forecast use / day', fT(avg7), 'Next 7 planned days', '#47D7AC')}${kpi('Actual use / day', C.act7 === null ? '–' : fT(C.act7), 'Last week measured', '#7566A0')}${kpi('Typical miss', '± ' + fT(err), 'per day', '#99D6EA')}</tr></table>
+      ${days.length ? box(eyebrow('Forecast') + `<div style="${F}font-size:15px;font-weight:700;padding-bottom:10px">Vessel level, day by day</div>` + chart) : ''}
+      ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">Delivery schedule to ${fmtD(C.end)}</div>` + sched + `<div style="${F}font-size:11px;color:${MUTE};padding-top:8px">Assumes each load lands early on the day shown, before that day's use, and the Live Brewery Board plan is followed.</div>`)}
+      ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">What's planned — next ${use.length} days</div>` + useTbl)}
+      <div style="${F}font-size:11px;color:${MUTE};padding-top:12px;line-height:1.5">Forecast built from transfers (70/300/500 HL), packaging cartons and kegs on the Live Brewery Board, fitted to handover gauge readings. Brite CIPs are not tracked separately, so allow about ± ${fT(err)} per day.</div>
+    </div>`;
+  }
+
+  function emailSubject() {
+    const p = C.sim.planned[0];
+    return p ? `CO2 delivery plan — ${p.ordered ? 'ordered ' : 'next load '}${fmtD(p.d)}` : 'CO2 delivery plan — no delivery needed';
+  }
+
+  async function copyRich(html, text) {
+    try {
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+        return true;
+      }
+    } catch (_) { /* fall through to selection copy */ }
+    const host = $('#emailBody'); if (!host) return false;
+    const r = document.createRange(); r.selectNodeContents(host);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    let ok = false; try { ok = document.execCommand('copy'); } catch (_) { /* ignore */ }
+    sel.removeAllRanges(); return ok;
+  }
+
+  function openEmail() {
+    const html = emailHTML(), subj = emailSubject();
+    let m = $('#emailModal'); if (m) m.remove();
+    m = document.createElement('div'); m.id = 'emailModal'; m.className = 'modal';
+    m.innerHTML = `<div class="modal-card" role="dialog" aria-label="Email version">
+      <div class="modal-head"><div><span class="eyebrow">Email version</span><b>Preview — pastes into Outlook, Gmail or Teams</b></div>
+        <div class="modal-actions"><button class="btn small" id="emSubj">Copy subject</button><button class="btn teal" id="emCopy">Copy email</button><button class="btn" id="emClose">Close</button></div></div>
+      <div class="modal-subj"><span class="muted">Suggested subject:</span> ${esc(subj)}</div>
+      <div class="modal-body"><div id="emailBody">${html}</div></div></div>`;
+    document.body.appendChild(m);
+    const doCopy = async () => { const ok = await copyRich(html, summaryText()); toast(ok ? 'Email copied — paste it into your message' : 'Copy blocked by the browser — select the preview and copy it'); };
+    $('#emCopy').onclick = doCopy;
+    $('#emSubj').onclick = async () => { try { await navigator.clipboard.writeText(subj); toast('Subject copied'); } catch (_) { toast(subj); } };
+    const close = () => { m.remove(); document.removeEventListener('keydown', esc2); };
+    const esc2 = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', esc2);
+    $('#emClose').onclick = close; m.addEventListener('click', (e) => { if (e.target === m) close(); });
+    doCopy();
+  }
+
   async function readXlsx(file) {
     if (!window.XLSX) throw new Error('Spreadsheet reader did not load');
     return window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
@@ -875,6 +975,7 @@
     try { await navigator.clipboard.writeText(t); toast('Order summary copied'); }
     catch (e) { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); toast('Order summary copied'); } catch (_) { toast('Copy not available here'); } ta.remove(); }
   });
+  $('#emailBtn').addEventListener('click', () => { if (!C) return; openEmail(); });
   $('#printBtn').addEventListener('click', () => window.print());
 
   /* bubbles */
