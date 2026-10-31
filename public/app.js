@@ -247,7 +247,7 @@
         <li><b>Level on arrival</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
         <li><b>Hits ${set.floor}% floor</b><span>${sim.floorDate ? fmtD(sim.floorDate) : 'not in window'}${sim.floorDateLo && sim.floorDateLo < sim.floorDate ? ` <span class="muted">(as early as ${fmtD(sim.floorDateLo)})</span>` : ''}</span></li>
         <li><b>Scale back (${set.scale}%) if none</b><span>${sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window'}</span></li>
-        <li><b>Production stops (${set.halt}%)</b><span>${sim.haltDate ? fmtD(sim.haltDate) : 'not in window'}</span></li>`;
+        <li><b>Production stops (${set.halt}%) if none</b><span>${sim.haltDate ? fmtD(sim.haltDate) : 'not in window'}</span></li>`;
     } else {
       when = 'None needed'; relTxt = `to ${fmtS(C.end)}`;
       list = `<li><b>Lowest level</b><span>${fP(Math.min(...sim.rows.map((r) => r.e)))} before ${fmtD(C.end)}</span></li>`;
@@ -750,7 +750,7 @@
       card = `${eyebrow(p.ordered ? 'Next delivery · ordered' : 'Next delivery')}
         <div style="${F}font-size:30px;font-weight:700;color:${INK};line-height:1.15">${fmtD(p.d)}</div>
         <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · early-morning truck'}</div>
-        <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Load', `${fT(p.add)} ${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full load fits'}`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Scale back (' + set.scale + '%) if none', sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window')}${li('Production stops (' + set.halt + '%)', sim.haltDate ? fmtD(sim.haltDate) : 'not in window')}</table>
+        <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Load', `${fT(p.add)} ${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full load fits'}`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Scale back (' + set.scale + '%) if none', sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window')}${li('Production stops (' + set.halt + '%) if none', sim.haltDate ? fmtD(sim.haltDate) : 'not in window')}</table>
         <div style="${F}font-size:13px;font-weight:600;color:${INK};padding-top:10px">${esc(ns.text)}</div>`;
     } else card = `${eyebrow('Next delivery')}<div style="${F}font-size:26px;font-weight:700;color:${INK}">None needed</div><div style="${F}font-size:13px;color:${MUTE};padding-top:4px">The vessel stays above the ${set.floor}% floor to ${fmtD(C.end)}.</div>`;
 
