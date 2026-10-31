@@ -38,6 +38,8 @@
     delete s.invNeedsSeed;
     const seedOrders = (window.SEED && window.SEED.orders) || [];
     if (!Array.isArray(s.orders)) s.orders = [];
+    if (!Array.isArray(s.events)) s.events = [];
+    ((window.SEED && window.SEED.events) || []).forEach((ev) => { if (!s.events.some((x) => x.id === ev.id) && !(s.removedEvents || []).includes(ev.id)) s.events.push({ ...ev }); });
     if (s.invNeedsSeed || !s.seededOrders) { seedOrders.forEach((o) => { if (!s.orders.some((x) => x.id === o.id)) s.orders.push({ ...o }); }); s.seededOrders = true; }
     s.settings = { ...DEFAULTS, ...(s.settings || {}) };
     s.overrides = s.overrides || {};
@@ -479,7 +481,7 @@
             <div class="kpi"><small>Days used</small><b>${m.n}</b><p>Observation periods with a clean reading at each end</p></div>
             <div class="kpi"><small>Average draw</small><b>${m.ok ? fT(m.perDayMean) : '–'}</b><p>${m.ok ? fP(m.perDayMean) + ' of the vessel per day' : ''}</p></div>
           </div>
-          <div class="note" style="padding-top:0"><b>Reading this honestly:</b> ${strong.length ? strong.join(', ') + (strong.length > 1 ? ' are' : ' is') + ' the clearest signal' + (strong.length > 1 ? 's' : '') + '.' : 'No single driver stands out yet.'} ${weak.length ? weak.join(' and ') + ' show' + (weak.length > 1 ? '' : 's') + ' little effect so far — too small or too irregular to separate out.' : ''} Brite CIPs are not on the board, so they sit in the base load and are the main source of the ± above. Fitted on ${m.n} periods since ${C.hist.length ? fmtS(C.hist[0].days[0]) : '–'}; a few odd days are down-weighted automatically and listed under Data checks.</div>
+          <div class="note" style="padding-top:0"><b>Reading this honestly:</b> ${strong.length ? strong.join(', ') + (strong.length > 1 ? ' are' : ' is') + ' the clearest signal' + (strong.length > 1 ? 's' : '') + '.' : 'No single driver stands out yet.'} ${weak.length ? weak.join(' and ') + ' show' + (weak.length > 1 ? '' : 's') + ' little effect so far — too small or too irregular to separate out.' : ''} Brite CIPs are not on the board, so they sit in the base load and are the main source of the ± above. A CO2 leak at the DAW Plant, likely running since at least February, was fixed on 30 Oct (size unknown, probably small). It has been in every reading used here, so it sits inside the base load; from 30 Oct actual use may run slightly under the prediction, and the base load will settle lower as new days come in. Fitted on ${m.n} periods since ${C.hist.length ? fmtS(C.hist[0].days[0]) : '–'}; a few odd days are down-weighted automatically and listed under Data checks.</div>
         </div>
       </div>
       <div class="panel" style="margin-top:14px">
@@ -609,12 +611,16 @@
     const set = S();
     const rows = state.readings.slice().sort((a, b) => (a.d < b.d ? 1 : -1));
     const dl = {}; C.past.forEach((x) => (dl[x.d] = x));
+    // actual (evening-to-evening) vs what the board-based model predicts for that day; multi-day gaps show the per-day average
+    const av = {}; C.hist.forEach((o) => o.days.forEach((d) => { if (o.pred !== null) av[d] = { a: o.use / o.n, p: o.pred / o.n, n: o.n }; }));
     const body = rows.map((r) => {
-      const dv = dl[r.d];
+      const dv = dl[r.d], u = av[r.d], evs = state.events.filter((x) => x.d === r.d);
+      const useCells = u ? (() => { const df = u.a - u.p, big = Math.abs(df) > 1.5; return `<td class="r num">${fT(u.a)}<small>${fP(u.a)}${u.n > 1 ? ' · avg of ' + u.n + ' days' : ''}</small></td><td class="r num">${fT(u.p)}<small>${fP(u.p)}</small></td><td class="r num" style="color:${big ? '#000' : 'var(--muted)'};font-weight:${big ? 700 : 400}">${df > 0 ? '+' : '−'}${fT(Math.abs(df))}<small>${df > 0 ? 'more than predicted' : 'less than predicted'}</small></td>`; })() : '<td class="r muted">–</td><td class="r muted">–</td><td class="r muted">–</td>';
       return `<tr><td class="sticky-col">${fmtD(r.d)}</td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.am === null ? '' : r.am}" data-d="${r.d}" data-f="am" aria-label="Morning level ${r.d}"></td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.pm === null ? '' : r.pm}" data-d="${r.d}" data-f="pm" aria-label="Evening level ${r.d}"></td>
-        <td>${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.short ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.short ? ' — short load?' : ''}</span>` : ''}</td>
+        ${useCells}
+        <td>${evs.map((x) => `<span class="chip st-watch" title="${esc(x.text)}"><i></i>${esc(x.text.length > 34 ? x.text.slice(0, 32) + '…' : x.text)}</span> `).join('')}${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.short ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.short ? ' — short load?' : ''}</span>` : ''}</td>
         <td class="r"><button class="btn small x" data-act="delReading" data-d="${r.d}" aria-label="Delete reading ${r.d}">×</button></td></tr>`;
     }).join('');
     const outNotes = C.model.outliers.map((o) => `<li><b>${o.days.length > 1 ? fmtS(o.days[0]) + '–' + fmtS(o.d) : fmtS(o.d)}:</b> measured ${o.use.toFixed(1)} pts/day but the board predicts ${o.pred.toFixed(1)} — worth checking that day's readings or whether the plan changed.</li>`).join('');
@@ -623,7 +629,7 @@
     const boardMsg = C.lastBoard ? `Board loaded to <b>${fmtD(C.lastBoard)}</b>; transfers planned to <b>${C.boardEnd ? fmtD(C.boardEnd) : 'none'}</b>.` : 'No board loaded.';
     return `<section class="sec" id="readings">
       <div class="sec-head"><div><span class="eyebrow">Data</span><h2>Daily readings</h2>
-        <p>Enter the vessel level (% on the gauge) from the morning and evening handover. Use “Right now” for a mid-day check — the forecast then only counts the rest of today's use. A jump up is picked up automatically as a delivery.</p></div>
+        <p>Enter the vessel level (% on the gauge) from the morning and evening handover. Use “Right now” for a mid-day check — the forecast then only counts the rest of today's use. A jump up is picked up automatically as a delivery. Actual use is measured evening-to-evening; predicted use is what the Live Brewery Board says that day should have drawn.</p></div>
         <div class="row"><button class="btn small" data-act="pickCo2">Import CO2 handover sheet</button><button class="btn small" data-act="pickLbb">Import Live Brewery Board</button></div></div>
       <div class="panel pad">
         <div class="form-row">
@@ -636,8 +642,15 @@
         </div>
         <p class="muted" style="font-size:12px;margin-top:10px">${boardMsg} Upload a fresh board export whenever the plan changes.</p>
       </div>
+      <div class="panel pad" style="margin-top:14px" id="events">
+        <b>Site notes</b> <span class="muted" style="font-size:12px">· things that change CO2 use but are not on the board (leaks, equipment fixes). Shown against the day in the table below.</span>
+        <ul class="plain" style="margin:8px 0">${state.events.slice().sort((a, b) => (a.d < b.d ? 1 : -1)).map((x) => `<li><b>${fmtD(x.d)}:</b> ${esc(x.text)} <button class="btn small x" data-act="delEvent" data-id="${esc(x.id)}" aria-label="Delete note">×</button></li>`).join('') || '<li class="muted">None yet.</li>'}</ul>
+        <div class="form-row"><label class="fld"><span>Date</span><input type="date" id="evDate" value="${TODAY}"></label>
+          <label class="fld" style="flex:1;min-width:200px"><span>Note</span><input type="text" id="evText" placeholder="e.g. Leak fixed at DAW Plant"></label>
+          <button class="btn" data-act="addEvent">Add note</button></div>
+      </div>
       ${notes || pastNotes ? `<div class="banner" style="margin:14px 0 0;display:block"><b>Data checks</b><ul class="plain" style="margin-top:4px">${pastNotes}${notes}</ul></div>` : ''}
-      <div class="panel" style="margin-top:14px"><div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>Date</th><th class="r">Morning %</th><th class="r">Evening %</th><th>Detected</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="5" class="muted">No readings yet.</td></tr>'}</tbody></table></div></div>
+      <div class="panel" style="margin-top:14px"><div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>Date</th><th class="r">Morning %</th><th class="r">Evening %</th><th class="r">Actual use</th><th class="r">Predicted use</th><th class="r">Difference</th><th>Detected</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="8" class="muted">No readings yet.</td></tr>'}</tbody></table></div></div>
     </section>`;
   }
 
@@ -898,6 +911,10 @@
     } else if (a === 'logOrder') {
       state.orders.push({ id: 'o' + Date.now(), date: b.dataset.d, when: 'am', t: S().load, placed: TODAY, note: '' });
       save(); render(); toast(`Order logged for ${fmtD(b.dataset.d)}`);
+    } else if (a === 'addEvent') {
+      const d = $('#evDate').value, t = $('#evText').value.trim(); if (!d || !t) return toast('Enter a date and a short note');
+      state.events.push({ id: 'ev' + Date.now(), d, text: t }); save(); render(); toast('Note added');
+    } else if (a === 'delEvent') { state.events = state.events.filter((x) => x.id !== b.dataset.id); (state.removedEvents = state.removedEvents || []).push(b.dataset.id); save(); render();
     } else if (a === 'delOrder') { state.orders = state.orders.filter((o) => o.id !== b.dataset.id); save(); render(); }
     else if (a === 'resetOv') { state.overrides = {}; save(); render(); toast('Plan changes cleared'); }
     else if (a === 'pickCo2') $('#co2File').click();
@@ -965,7 +982,7 @@
     try {
       const j = JSON.parse(await f.text());
       if (!Array.isArray(j.readings) || typeof j.board !== 'object') throw new Error('not a Balter CO2 export');
-      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
+      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], events: j.events || [], invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
       save(); render(); toast('Data imported');
     } catch (err) { toast('Could not import: ' + err.message); }
   });
