@@ -3,7 +3,7 @@
   'use strict';
   const M = window.CO2, LBB = window.LBB;
   const KEY = 'balterCo2.v1';
-  const DEFAULTS = { cap: 30, load: 20, maxFill: 90, floor: 15, lead: 2, dows: [1, 2, 3, 4, 5] };
+  const DEFAULTS = { cap: 30, load: 20, maxFill: 95, floor: 15, scale: 10, halt: 5, lead: 2, dows: [1, 2, 3, 4, 5] };
   const Z = 1.28;                                   // ~90% band
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -42,6 +42,7 @@
     ((window.SEED && window.SEED.events) || []).forEach((ev) => { if (!s.events.some((x) => x.id === ev.id) && !(s.removedEvents || []).includes(ev.id)) s.events.push({ ...ev }); });
     if (s.invNeedsSeed || !s.seededOrders) { seedOrders.forEach((o) => { if (!s.orders.some((x) => x.id === o.id)) s.orders.push({ ...o }); }); s.seededOrders = true; }
     s.settings = { ...DEFAULTS, ...(s.settings || {}) };
+    if (!s.fill95) { if (s.settings.maxFill === 90) s.settings.maxFill = 95; s.fill95 = true; }   // earlier default was 90
     s.overrides = s.overrides || {};
     return s;
   }
@@ -113,7 +114,7 @@
       return base.map((v, i) => (ov && ov[i] !== null && ov[i] !== undefined ? ov[i] : v));
     };
     const days = M.range(startDate, end).map((d, i) => ({ d, rec: recFor(d), frac: i === 0 ? frac0 : 1 }));
-    const cfg = { floor: set.floor, loadPct: set.load / set.cap * 100, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
+    const cfg = { floor: set.floor, scale: set.scale, halt: set.halt, loadPct: set.load / set.cap * 100, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
     const kgPt0 = set.cap * 10;
     const orderArr = (o) => (o.when === 'night' ? M.addDays(o.date, 1) : o.date);
     const orders = state.orders.map((o) => ({ i: days.findIndex((x) => x.d === orderArr(o)), pts: Math.max(0, o.t) * 1000 / kgPt0, ref: o })).filter((o) => o.i >= 0);
@@ -146,9 +147,12 @@
     if (p.ordered) {
       const lo = p.lowBefore, nx = C.sim.planned.find((x) => !x.ordered);
       const more = nx ? ` Next load to order: ${fmtD(nx.d)} — order by ${fmtD(nx.orderBy)}.` : '';
-      if (p.before < 0.5) return { st: 'risk', text: `Order placed, but the vessel is forecast to run dry before it arrives.${more}`, p };
-      if (lo < 3 || C.sim.planned.some((x) => x.tooLate)) return { st: 'risk', text: `Order placed — but in a heavy-use case the vessel could be nearly empty (${fP(Math.max(0, lo), 0)}) when it arrives.${more}`, p };
-      if (p.before < S().floor) return { st: 'watch', text: `Order placed — arrives with ≈${fP(p.before)} left, under your ${S().floor}% floor.${more}`, p };
+      const S2 = S();
+      if (p.before < S2.halt) return { st: 'risk', text: `Order placed, but the vessel is forecast to fall below ${S2.halt}% (production stops) before it arrives.${more}`, p };
+      if (p.before < S2.scale || C.sim.planned.some((x) => x.tooLate)) return { st: 'risk', text: `Order placed — but the vessel is forecast to drop under ${S2.scale}% (production scale-back) before it arrives.${more}`, p };
+      if (lo < S2.halt) return { st: 'watch', text: `Order placed — arrives with ≈${fP(p.before)}, but in a heavy-use case it could dip under ${S2.halt}% (production stop level).${more}`, p };
+      if (lo < S2.scale) return { st: 'watch', text: `Order placed — arrives with ≈${fP(p.before)}; in a heavy-use case it could dip under ${S2.scale}% (scale-back level).${more}`, p };
+      if (p.before < S2.floor) return { st: 'watch', text: `Order placed — arrives with ≈${fP(p.before)} left: under your ${S2.floor}% comfort floor but above the ${S2.scale}% scale-back level.${more}`, p };
       return { st: 'ok', text: `Order placed — arrives with ≈${fP(p.before, 0)} (${fT(p.before)}) left.${more}`, p };
     }
     const left = M.diffDays(TODAY, p.orderBy);
@@ -174,7 +178,7 @@
         <label class="fld" id="qTimeWrap" style="${t === 'cur' ? '' : 'display:none'}"><span>Time</span><input type="time" id="qTime" value="${nowHM()}"></label>
         <button class="btn teal" data-act="quickSave">Save reading</button>
       </div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0">Morning and evening are the handover levels. “Live now” is a mid-day check — the forecast then counts only the rest of today's use.</p>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Morning and evening are the gauge levels at the start and end of the day. “Live now” is a mid-day check — the forecast then counts only the rest of today's use.</p>
     </div>`;
   }
 
@@ -189,7 +193,7 @@
       <div class="panel drop" id="drop" tabindex="0" role="button" aria-label="Drop the Live Brewery Board spreadsheet here, or press Enter to choose a file">
         <span class="eyebrow">Update the plan</span>
         <div class="drop-title">Drop the latest Live Brewery Board here</div>
-        <p class="muted" style="font-size:12.5px;margin:4px 0 0">or click to choose the .xlsx file. The forecast recalculates straight away. (A CO2 handover sheet dropped here is imported as readings.)</p>
+        <p class="muted" style="font-size:12.5px;margin:4px 0 0">or click to choose the .xlsx file. The forecast recalculates straight away.</p>
         <p class="drop-status" style="font-size:12px;margin:10px 0 0">${status}</p>
       </div>
     </div>`;
@@ -228,8 +232,8 @@
     const ns = nextStatus(), p = ns.p, sim = C.sim, set = S();
     const stale = M.diffDays(C.latest ? (C.latest.pm !== null ? C.latest.d : C.latest.d) : TODAY, TODAY);
     let banners = '';
-    if (!C.q.rows.length) banners += `<div class="banner"><span><b>No readings yet.</b> Add the latest CO2 level in the Readings section to start forecasting.</span></div>`;
-    else if (stale >= 2) banners += `<div class="banner"><span><b>Latest reading is ${stale} days old (${esc(C.lastLabel)}).</b> The forecast runs from that reading — add recent levels for a tighter prediction.</span><a class="btn small" href="#readings">Add reading</a></div>`;
+    if (!C.q.rows.length) banners += `<div class="banner"><span><b>No readings yet.</b> Add the latest CO2 level in the Add a reading panel to start forecasting.</span></div>`;
+    else if (stale >= 2) banners += `<div class="banner"><span><b>Latest reading is ${stale} days old (${esc(C.lastLabel)}).</b> The forecast runs from that reading — add recent levels for a tighter prediction.</span><a class="btn small" href="#quick">Add reading</a></div>`;
     if (!C.model.ok) banners += `<div class="banner"><span><b>Not enough clean readings to fit the model yet</b> (${C.model.n} usable days). Showing a plain average until more readings are added.</span></div>`;
     if (sim.unresolved) banners += `<div class="banner bad"><span><b>Heads up:</b> the vessel gets close to the floor before a delivery can land (weekend or already too late). Consider an earlier or extra load.</span></div>`;
 
@@ -242,7 +246,8 @@
         <li><b>Load</b><span>${fT(p.add)} <span class="muted">${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full 20 t load fits'}</span></span></li>
         <li><b>Level on arrival</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
         <li><b>Hits ${set.floor}% floor</b><span>${sim.floorDate ? fmtD(sim.floorDate) : 'not in window'}${sim.floorDateLo && sim.floorDateLo < sim.floorDate ? ` <span class="muted">(as early as ${fmtD(sim.floorDateLo)})</span>` : ''}</span></li>
-        <li><b>Runs dry if none</b><span>${sim.emptyDate ? fmtD(sim.emptyDate) : 'not in window'}</span></li>`;
+        <li><b>Scale back (${set.scale}%) if none</b><span>${sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window'}</span></li>
+        <li><b>Production stops (${set.halt}%)</b><span>${sim.haltDate ? fmtD(sim.haltDate) : 'not in window'}</span></li>`;
     } else {
       when = 'None needed'; relTxt = `to ${fmtS(C.end)}`;
       list = `<li><b>Lowest level</b><span>${fP(Math.min(...sim.rows.map((r) => r.e)))} before ${fmtD(C.end)}</span></li>`;
@@ -337,6 +342,8 @@
     g += `<text class="ax" x="${L - 7}" y="${T - 7}" text-anchor="end">${(S().cap).toFixed(0)} t</text>`;
     // floor
     g += `<line x1="${L}" x2="${W - R}" y1="${y(S().floor)}" y2="${y(S().floor)}" stroke="#000" stroke-width="1.4" stroke-dasharray="6 5"/><text class="lbl" x="${W - R - 4}" y="${y(S().floor) - 6}" text-anchor="end">Reorder floor ${S().floor}%</text>`;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(S().scale)}" y2="${y(S().scale)}" stroke="#E0782A" stroke-width="1.4" stroke-dasharray="2 4"/><text class="lbl" x="${W - R - 4}" y="${y(S().scale) - 5}" text-anchor="end" fill="#E0782A">Scale back ${S().scale}%</text>`;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(S().halt)}" y2="${y(S().halt)}" stroke="#C0392B" stroke-width="1.6"/><text class="lbl" x="${W - R - 4}" y="${y(S().halt) - 5}" text-anchor="end" fill="#C0392B">Production stops ${S().halt}%</text>`;
     // band
     const sim = C.sim;
     if (sim.rows.length) {
@@ -405,7 +412,7 @@
         <p>Black line = readings, purple dashed = forecast with its 90% range (blue). Change any number in the table below to test a what-if; it recalculates straight away.</p></div></div>
       <div class="panel">
         <div class="chart-wrap" id="lvlWrap">${levelChart()}<div class="tip" id="tip"></div></div>
-        <div class="legend"><span><i class="line"></i>Readings</span><span><i class="dash" style="border-top-color:#7566A0"></i>Forecast</span><span><i style="background:#99D6EA"></i>90% range</span><span><i style="background:#7566A0"></i>Ordered</span><span><i style="background:#FDAA63"></i>Suggested delivery</span><span><i style="background:#47D7AC"></i>Delivery received</span><span><i class="dash"></i>Reorder floor</span></div>
+        <div class="legend"><span><i class="line"></i>Readings</span><span><i class="dash" style="border-top-color:#7566A0"></i>Forecast</span><span><i style="background:#99D6EA"></i>90% range</span><span><i style="background:#7566A0"></i>Ordered</span><span><i style="background:#FDAA63"></i>Suggested delivery</span><span><i style="background:#47D7AC"></i>Delivery received</span><span><i class="dash"></i>Reorder floor</span><span><i style="background:#E0782A"></i>Scale back 10%</span><span><i style="background:#C0392B"></i>Stop 5%</span></div>
       </div>
       <div class="panel" style="margin-top:14px">
         <div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between"><div><b>Plan &amp; predicted use</b> <span class="muted" style="font-size:12px">· transfers counted per tank, cartons and kegs from the board</span></div>
@@ -628,21 +635,7 @@
     const pastNotes = C.past.filter((x) => x.short).map((x) => `<li><b>${fmtS(x.d)}:</b> the level rose about ${fT(x.pts)} (${fP(x.before, 0)} → ${fP(x.before + x.pts, 0)}), well short of a ${set.load} t load that fits — was this a short delivery?</li>`).join('');
     const boardMsg = C.lastBoard ? `Board loaded to <b>${fmtD(C.lastBoard)}</b>; transfers planned to <b>${C.boardEnd ? fmtD(C.boardEnd) : 'none'}</b>.` : 'No board loaded.';
     return `<section class="sec" id="readings">
-      <div class="sec-head"><div><span class="eyebrow">Data</span><h2>Daily readings</h2>
-        <p>Enter the vessel level (% on the gauge) from the morning and evening handover. Use “Right now” for a mid-day check — the forecast then only counts the rest of today's use. A jump up is picked up automatically as a delivery. Actual use is measured evening-to-evening; predicted use is what the Live Brewery Board says that day should have drawn.</p></div>
-        <div class="row"><button class="btn small" data-act="pickCo2">Import CO2 handover sheet</button><button class="btn small" data-act="pickLbb">Import Live Brewery Board</button></div></div>
-      <div class="panel pad">
-        <div class="form-row">
-          <label class="fld"><span>Date</span><input type="date" id="rdDate" value="${TODAY}"></label>
-          <label class="fld"><span>Morning %</span><input type="number" id="rdAm" step="0.1" min="0" max="100" placeholder="e.g. 64.5"></label>
-          <label class="fld"><span>Evening %</span><input type="number" id="rdPm" step="0.1" min="0" max="100" placeholder="e.g. 59.5"></label>
-          <label class="fld"><span>Right now %</span><input type="number" id="rdNow" step="0.1" min="0" max="100" placeholder="mid-day level"></label>
-          <label class="fld"><span>Time</span><input type="time" id="rdTime" value="${nowHM()}"></label>
-          <button class="btn teal" data-act="saveReading">Save reading</button>
-        </div>
-        <p class="muted" style="font-size:12px;margin-top:10px">${boardMsg} Upload a fresh board export whenever the plan changes.</p>
-      </div>
-      <div class="panel pad" style="margin-top:14px" id="events">
+      <div class="panel pad" id="events">
         <b>Site notes</b> <span class="muted" style="font-size:12px">· things that change CO2 use but are not on the board (leaks, equipment fixes). Shown against the day in the table below.</span>
         <ul class="plain" style="margin:8px 0">${state.events.slice().sort((a, b) => (a.d < b.d ? 1 : -1)).map((x) => `<li><b>${fmtD(x.d)}:</b> ${esc(x.text)} <button class="btn small x" data-act="delEvent" data-id="${esc(x.id)}" aria-label="Delete note">×</button></li>`).join('') || '<li class="muted">None yet.</li>'}</ul>
         <div class="form-row"><label class="fld"><span>Date</span><input type="date" id="evDate" value="${TODAY}"></label>
@@ -665,7 +658,9 @@
           ${f('cap', 'Vessel capacity (t)', 'Gauge % × this = tonnes', 1, 1, 200)}
           ${f('load', 'Delivery load (t)', 'Standard tanker load', 1, 1, 100)}
           ${f('maxFill', 'Max fill (%)', 'Level a delivery can fill to', 1, 50, 100)}
-          ${f('floor', 'Reorder floor (%)', 'Never plan to go below this', 1, 0, 60)}
+          ${f('floor', 'Comfort floor (%)', 'Plan deliveries to stay above this (conservative)', 1, 0, 60)}
+          ${f('scale', 'Scale-back level (%)', 'Production is reduced and tough calls start', 1, 0, 60)}
+          ${f('halt', 'Production stops (%)', 'Production stops altogether', 1, 0, 60)}
           ${f('lead', 'Order notice (days)', 'How far ahead you need to order', 1, 0, 14)}
           <div class="fld"><span>Delivery days accepted</span><div class="dows">${dows}</div><small>Deliveries are only placed on ticked days</small></div>
         </div>
@@ -742,7 +737,8 @@
     const INK = '#000', MUTE = '#5b5b66', LINE = '#E6E3EE';
     const eyebrow = (t, c) => `<div style="${F}font-size:11px;letter-spacing:1.2px;text-transform:uppercase;font-weight:600;color:${c || '#7566A0'};margin:0 0 4px">${t}</div>`;
     const stCol = { ok: ['#E8FAF4', '#47D7AC'], watch: ['#FFF8D6', '#FFD637'], order: ['#FFF1E4', '#FDAA63'], risk: ['#FFF1E4', '#FDAA63'] }[ns.st] || ['#E8FAF4', '#47D7AC'];
-    const kpi = (label, val, sub, col) => `<td width="25%" valign="top" style="padding:0 4px"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-top:4px solid ${col};border-radius:10px"><tr><td style="padding:10px 12px;${F}"><div style="font-size:10.5px;letter-spacing:1px;text-transform:uppercase;font-weight:600;color:${MUTE}">${label}</div><div style="font-size:20px;font-weight:700;color:${INK};padding-top:2px">${val}</div><div style="font-size:11.5px;color:${MUTE};padding-top:2px">${sub}</div></td></tr></table></td>`;
+    let kpiN = 0;
+    const kpi = (label, val, sub, col) => `<td width="25%" valign="top" style="padding:${['0 4px 0 0', '0 4px', '0 4px', '0 0 0 4px'][kpiN++ % 4]}"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-top:4px solid ${col};border-radius:10px"><tr><td style="padding:10px 12px;${F}"><div style="font-size:10.5px;letter-spacing:1px;text-transform:uppercase;font-weight:600;color:${MUTE}">${label}</div><div style="font-size:20px;font-weight:700;color:${INK};padding-top:2px">${val}</div><div style="font-size:11.5px;color:${MUTE};padding-top:2px">${sub}</div></td></tr></table></td>`;
     const next7 = sim.rows.slice(0, 7), avg7 = next7.length ? next7.reduce((a, r) => a + r.use, 0) / next7.length : 0;
     const err = Math.max(0.6, C.model.sigma || C.model.loo || C.model.rmse);
 
@@ -754,7 +750,7 @@
       card = `${eyebrow(p.ordered ? 'Next delivery · ordered' : 'Next delivery')}
         <div style="${F}font-size:30px;font-weight:700;color:${INK};line-height:1.15">${fmtD(p.d)}</div>
         <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · early-morning truck'}</div>
-        <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Load', `${fT(p.add)} ${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full load fits'}`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Runs dry if none', sim.emptyDate ? fmtD(sim.emptyDate) : 'not in window')}</table>
+        <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Load', `${fT(p.add)} ${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full load fits'}`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Scale back (' + set.scale + '%) if none', sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window')}${li('Production stops (' + set.halt + '%)', sim.haltDate ? fmtD(sim.haltDate) : 'not in window')}</table>
         <div style="${F}font-size:13px;font-weight:600;color:${INK};padding-top:10px">${esc(ns.text)}</div>`;
     } else card = `${eyebrow('Next delivery')}<div style="${F}font-size:26px;font-weight:700;color:${INK}">None needed</div><div style="${F}font-size:13px;color:${MUTE};padding-top:4px">The vessel stays above the ${set.floor}% floor to ${fmtD(C.end)}.</div>`;
 
@@ -780,18 +776,19 @@
     const use = sim.rows.slice(0, 10), tr = (r) => { const b = state.board[r.d] || [0, 0, 0, 0, 0]; const ov = state.overrides[r.d] || []; const v = (k) => (ov[k] !== null && ov[k] !== undefined ? ov[k] : b[k]); return [v(0), v(1), v(2), v(3), v(4)]; };
     const useTbl = `<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${th('Day')}${th('70HL', 1)}${th('300HL', 1)}${th('500HL', 1)}${th('Cartons', 1)}${th('Kegs', 1)}${th('Forecast use', 1)}${th('End level', 1)}</tr>${use.map((r) => { const q = tr(r); return `<tr>${td(fmtD(r.d), 0, 1)}${td(q[0] || '–', 1)}${td(q[1] || '–', 1)}${td(q[2] || '–', 1)}${td(q[3] ? q[3].toLocaleString('en-AU') : '–', 1)}${td(q[4] || '–', 1)}${td(fT(r.use) + ' <span style="color:' + MUTE + '">(' + fP(r.use) + ')</span>', 1)}${td(fP(r.e, 0) + (r.add ? ' <span style="color:#E0782A;font-weight:700">▲</span>' : ''), 1)}</tr>`; }).join('')}</table>`;
 
-    const box = (inner, extra) => `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-radius:12px;margin-top:14px"><tr><td style="padding:14px 16px;${extra || ''}">${inner}</td></tr></table>`;
+    const GAP = '<div style="height:18px;line-height:18px;font-size:1px">&nbsp;</div>';
+    const box = (inner, extra) => `${GAP}<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-radius:12px"><tr><td style="padding:14px 16px;${extra || ''}">${inner}</td></tr></table>`;
     const stamp = new Date().toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     return `<div style="max-width:760px;margin:0;background:#ffffff;${F}color:${INK}">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="5" bgcolor="#47D7AC" width="25%" style="height:5px;font-size:1px;line-height:1px">&nbsp;</td><td bgcolor="#FDAA63" width="25%" style="font-size:1px;line-height:1px">&nbsp;</td><td bgcolor="#7566A0" width="25%" style="font-size:1px;line-height:1px">&nbsp;</td><td bgcolor="#99D6EA" width="25%" style="font-size:1px;line-height:1px">&nbsp;</td></tr></table>
-      <table cellpadding="0" cellspacing="0" border="0" style="margin:14px 0 4px"><tr><td style="padding-right:12px"><table cellpadding="0" cellspacing="0" border="0"><tr><td width="40" height="40" align="center" bgcolor="#47D7AC" style="width:40px;height:40px;border-radius:8px;${F}font-size:22px;font-weight:700;color:#fff">B</td></tr></table></td><td>${eyebrow('Balter Brewing · Supply Planning')}<div style="${F}font-size:20px;font-weight:700;color:${INK}">CO2 Delivery Plan</div></td></tr></table>
+      <table cellpadding="0" cellspacing="0" border="0" style="margin:14px 0 4px"><tr><td width="52" style="padding-right:12px"><table width="40" cellpadding="0" cellspacing="0" border="0" style="width:40px"><tr><td width="40" height="40" align="center" bgcolor="#47D7AC" style="width:40px;height:40px;border-radius:8px;${F}font-size:22px;font-weight:700;color:#fff">B</td></tr></table></td><td>${eyebrow('Balter Brewing · Supply Planning')}<div style="${F}font-size:20px;font-weight:700;color:${INK}">CO2 Delivery Plan</div></td></tr></table>
       <div style="${F}font-size:12px;color:${MUTE};padding-bottom:10px">Prepared ${stamp} · ${esc(C.lastLabel)} · 30 t vessel, 20 t loads</div>
       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${stCol[1]};border-left:6px solid ${stCol[1]};border-radius:12px;background:${stCol[0]}" bgcolor="${stCol[0]}"><tr><td style="padding:16px 18px">${card}</td></tr></table>
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:14px -4px 0"><tr>${kpi('Vessel now', fT(C.startLevel) + ' <span style="font-size:12px;color:' + MUTE + ';font-weight:600">' + fP(C.startLevel) + '</span>', esc(C.lastLabel), '#FFD637')}${kpi('Forecast use / day', fT(avg7), 'Next 7 planned days', '#47D7AC')}${kpi('Actual use / day', C.act7 === null ? '–' : fT(C.act7), 'Last week measured', '#7566A0')}${kpi('Typical miss', '± ' + fT(err), 'per day', '#99D6EA')}</tr></table>
+      ${GAP}<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${kpi('Vessel now', fT(C.startLevel) + ' <span style="font-size:12px;color:' + MUTE + ';font-weight:600">' + fP(C.startLevel) + '</span>', esc(C.lastLabel), '#FFD637')}${kpi('Forecast use / day', fT(avg7), 'Next 7 planned days', '#47D7AC')}${kpi('Actual use / day', C.act7 === null ? '–' : fT(C.act7), 'Last week measured', '#7566A0')}${kpi('Typical miss', '± ' + fT(err), 'per day', '#99D6EA')}</tr></table>
       ${days.length ? box(eyebrow('Forecast') + `<div style="${F}font-size:15px;font-weight:700;padding-bottom:10px">Vessel level, day by day</div>` + chart) : ''}
       ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">Delivery schedule to ${fmtD(C.end)}</div>` + sched + `<div style="${F}font-size:11px;color:${MUTE};padding-top:8px">Assumes each load lands early on the day shown, before that day's use, and the Live Brewery Board plan is followed.</div>`)}
       ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">What's planned — next ${use.length} days</div>` + useTbl)}
-      <div style="${F}font-size:11px;color:${MUTE};padding-top:12px;line-height:1.5">Forecast built from transfers (70/300/500 HL), packaging cartons and kegs on the Live Brewery Board, fitted to handover gauge readings. Brite CIPs are not tracked separately, so allow about ± ${fT(err)} per day.</div>
+      <div style="${F}font-size:11px;color:${MUTE};padding-top:12px;line-height:1.5">Forecast built from transfers (70/300/500 HL), packaging cartons and kegs on the Live Brewery Board, fitted to daily gauge readings. Brite CIPs are not tracked separately, so allow about ± ${fT(err)} per day.</div>
     </div>`;
   }
 
@@ -917,7 +914,6 @@
     } else if (a === 'delEvent') { state.events = state.events.filter((x) => x.id !== b.dataset.id); (state.removedEvents = state.removedEvents || []).push(b.dataset.id); save(); render();
     } else if (a === 'delOrder') { state.orders = state.orders.filter((o) => o.id !== b.dataset.id); save(); render(); }
     else if (a === 'resetOv') { state.overrides = {}; save(); render(); toast('Plan changes cleared'); }
-    else if (a === 'pickCo2') $('#co2File').click();
     else if (a === 'pickLbb') $('#lbbFile').click();
     else if (a === 'defaults') { state.settings = { ...DEFAULTS }; save(); render(); toast('Settings reset'); }
     else if (a === 'import') $('#jsonFile').click();
@@ -925,17 +921,6 @@
       const blob = new Blob([JSON.stringify({ app: 'balter-co2', exported: new Date().toISOString(), ...state }, null, 1)], { type: 'application/json' });
       const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = `balter-co2-data-${TODAY}.json`; el.click(); setTimeout(() => URL.revokeObjectURL(el.href), 2000);
     }
-  });
-
-  $('#co2File').addEventListener('change', async (e) => {
-    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
-    try {
-      const rows = LBB.parseCo2Workbook(await readXlsx(f), window.XLSX, +TODAY.slice(0, 4));
-      if (!rows.length) return toast('No readings found — expected Date, Morning, Evening in columns A–C');
-      const map = new Map(state.readings.map((r) => [r.d, r])); rows.forEach((r) => map.set(r.d, r));
-      state.readings = [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1)); save(); render();
-      toast(`Imported ${rows.length} days of readings`);
-    } catch (err) { toast('Could not read that file: ' + err.message); }
   });
 
   async function importSheet(f) {
@@ -951,13 +936,7 @@
         const wk = Object.keys(res.days).sort().pop();
         return toast(`Board updated from ${f.name}: ${nd} days, through ${fmtD(wk)}`);
       }
-      const rows = LBB.parseCo2Workbook(wb, window.XLSX, +TODAY.slice(0, 4));
-      if (rows.length) {
-        const map = new Map(state.readings.map((r) => [r.d, r])); rows.forEach((r) => map.set(r.d, r));
-        state.readings = [...map.values()].sort((a, b) => (a.d < b.d ? -1 : 1)); save(); render();
-        return toast(`Imported ${rows.length} days of CO2 readings from ${f.name}`);
-      }
-      toast(`${f.name}: neither a Live Brewery Board nor a CO2 handover sheet that I recognise`);
+      toast(`${f.name}: that does not look like a Live Brewery Board (expected the weekly sheets with Transfer and Cartons rows)`);
     } catch (err) { toast('Could not read that file: ' + err.message); }
   }
   $('#lbbFile').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importSheet(f); });

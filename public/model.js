@@ -169,7 +169,7 @@
     // Scenario with no delivery (for "when do we hit the floor")
     const bare = run(false);
     const firstBelow = (rows, key, lim) => rows.findIndex((r) => r[key] < lim);
-    const iFloor = firstBelow(bare, 'e', cfg.floor), iFloorLo = firstBelow(bare, 'lo', cfg.floor), iEmpty = firstBelow(bare, 'e', 0);
+    const iScale = firstBelow(bare, 'e', cfg.scale || 10), iHalt = firstBelow(bare, 'e', cfg.halt || 5), iFloor = firstBelow(bare, 'e', cfg.floor), iFloorLo = firstBelow(bare, 'lo', cfg.floor), iEmpty = firstBelow(bare, 'e', 0);
     const iFits = bare.findIndex((r) => r.s <= cfg.maxFill - cfg.loadPct + 1e-9);
     // Plan deliveries
     let guard = 0, rows = bare;
@@ -195,6 +195,7 @@
     planned.forEach((x) => { if (!x.ordered && lastOrdered && x.d < lastOrdered) x.tooLate = true; });   // a suggested load that has to land before an order already placed
     return { rows, bare, use, sigma, planned, iFloor, iFloorLo, iEmpty, iFits,
              floorDate: iFloor >= 0 ? days[iFloor].d : null, floorDateLo: iFloorLo >= 0 ? days[iFloorLo].d : null,
+             scaleDate: iScale >= 0 ? days[iScale].d : null, haltDate: iHalt >= 0 ? days[iHalt].d : null,
              emptyDate: iEmpty >= 0 ? days[iEmpty].d : null, fitsDate: iFits >= 0 ? days[iFits].d : null,
              unresolved: rows.some((r) => r.short) };
   }

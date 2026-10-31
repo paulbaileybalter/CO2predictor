@@ -13,7 +13,7 @@ Local test: create `.dev.vars` with `SITE_PASSWORD=test`, then `npm i && npm run
 (Alternative with no code: put Cloudflare Access in front of the Worker.)
 
 ## Updating the data
-- In the site: add readings, or use *Import CO2 handover sheet* / *Import Live Brewery Board*. Saved per browser.
+- In the site: enter readings in *Add a reading*, and drop the latest Live Brewery Board onto the drop zone under the hero. Saved per browser.
 - To bake new data into the deployed site for everyone: `npm i` then
   `node tools/build-seed.cjs <Live_Brewery_Board.xlsx> <Co2_tracking.xlsx> 2026`, commit `public/data.js`, push.
   (Keep the .xlsx files out of the repo.)
