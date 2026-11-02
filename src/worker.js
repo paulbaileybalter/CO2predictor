@@ -1,5 +1,6 @@
 /* Password gate + shared storage for the Balter CO2 Predictor.
    - Password only (no username): /login form sets a signed cookie valid for 30 days.
+   - /api/summary (POST) writes the AI summary with Cloudflare Workers AI (binding AI).
    - /api/state (GET/PUT) keeps the readings, board and settings in Workers KV so everyone sees the same data.
    Secrets/bindings: SITE_PASSWORD (secret), DATA (KV namespace), ASSETS (static files from ./public). */
 
@@ -79,6 +80,31 @@ export default {
         return new Response('ok');
       }
       return new Response('Method not allowed', { status: 405 });
+    }
+
+    if (url.pathname === '/api/summary') {
+      if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+      if (!env.AI) return Response.json({ error: 'Workers AI is not bound on this Worker (add the "ai" binding in wrangler.jsonc).' }, { status: 501 });
+      const body = await request.text();
+      if (body.length > 12000) return Response.json({ error: 'Too much data' }, { status: 413 });
+      let facts = ''; try { facts = String(JSON.parse(body).facts || ''); } catch (e) { return Response.json({ error: 'Bad JSON' }, { status: 400 }); }
+      if (facts.length < 20) return Response.json({ error: 'Nothing to summarise' }, { status: 400 });
+      const system = 'You write a short status update about the CO2 bulk-gas supply at Balter Brewing for production and supply managers. '
+        + 'Use ONLY the facts provided. Copy numbers, dates and percentages exactly as written; never calculate, round or invent figures. '
+        + 'Write 4 to 6 plain sentences in Australian English, no headings, no bullet points, no markdown. '
+        + 'Lead with the delivery that matters most and whether it is safe, then the main risk and what (if anything) needs to be done and by when. '
+        + 'Mention production scale-back (10%) and production stop (5%) only if the facts show the vessel could get near them. Do not add advice beyond what the facts support.';
+      try {
+        const out = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+          messages: [{ role: 'system', content: system }, { role: 'user', content: 'Facts:\n' + facts }],
+          max_tokens: 350, temperature: 0.2,
+        });
+        const text = String((out && (out.response || (out.result && out.result.response))) || '').trim();
+        if (!text) return Response.json({ error: 'The AI returned nothing — try again' }, { status: 502 });
+        return Response.json({ text }, { headers: { 'Cache-Control': 'no-store' } });
+      } catch (e) {
+        return Response.json({ error: 'AI request failed: ' + (e && e.message ? e.message : e) }, { status: 502 });
+      }
     }
 
     const res = await env.ASSETS.fetch(request);

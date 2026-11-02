@@ -21,3 +21,9 @@ Local test: create `.dev.vars` with `SITE_PASSWORD=test`, then `npm i && npm run
 ## Notes
 - Gauge readings are treated as % of the 30 t vessel; change capacity, load, floor, notice and delivery days in Settings.
 - Dates in the CO2 sheet: text like `28/10` is day/month; real date cells are swapped back (Excel read `12/10` as 10 Dec).
+
+## AI summary
+`wrangler.jsonc` binds Cloudflare Workers AI (`"ai": {"binding": "AI"}`), and the Worker's `/api/summary` route uses it
+(model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`) to word the plan figures as a short summary. Nothing to set up: the
+binding is created on deploy. Workers AI has a free daily allowance, then is billed per use. If the model is ever retired,
+change the model name in `src/worker.js`. The button only works on the deployed site (locally it explains why).

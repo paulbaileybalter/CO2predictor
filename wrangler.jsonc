@@ -10,5 +10,6 @@
   },
   "kv_namespaces": [
     { "binding": "DATA" }
-  ]
+  ],
+  "ai": { "binding": "AI" }
 }

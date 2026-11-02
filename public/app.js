@@ -38,6 +38,9 @@
     delete s.invNeedsSeed;
     const seedOrders = (window.SEED && window.SEED.orders) || [];
     if (!Array.isArray(s.orders)) s.orders = [];
+    s.orders.forEach((o) => { o.when = 'pm'; });
+    if (typeof s.notes !== 'string') s.notes = '';
+    if (typeof s.summary !== 'string') s.summary = '';
     if (!Array.isArray(s.events)) s.events = [];
     ((window.SEED && window.SEED.events) || []).forEach((ev) => { if (!s.events.some((x) => x.id === ev.id) && !(s.removedEvents || []).includes(ev.id)) s.events.push({ ...ev }); });
     if (s.invNeedsSeed || !s.seededOrders) { seedOrders.forEach((o) => { if (!s.orders.some((x) => x.id === o.id)) s.orders.push({ ...o }); }); s.seededOrders = true; }
@@ -116,7 +119,7 @@
     const days = M.range(startDate, end).map((d, i) => ({ d, rec: recFor(d), frac: i === 0 ? frac0 : 1 }));
     const cfg = { floor: set.floor, scale: set.scale, halt: set.halt, loadPct: set.load / set.cap * 100, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
     const kgPt0 = set.cap * 10;
-    const orderArr = (o) => (o.when === 'night' ? M.addDays(o.date, 1) : o.date);
+    const orderArr = (o) => o.date;                        // trucks arrive 10 pm on the delivery date
     const orders = state.orders.map((o) => ({ i: days.findIndex((x) => x.d === orderArr(o)), pts: Math.max(0, o.t) * 1000 / kgPt0, ref: o })).filter((o) => o.i >= 0);
     const sim = M.simulate({ startLevel, days, model, cfg, orders });
 
@@ -183,6 +186,40 @@
   }
 
 
+
+  function renderNotes() {
+    const has = (state.summary || '').trim().length > 0;
+    return `<div class="panel pad notes" id="notes">
+      <div class="notes-head"><div><span class="eyebrow">Summary</span><b>AI summary</b></div>
+        <div class="row"><button class="btn small teal" data-act="aiSummary" id="aiBtn">${has ? 'Regenerate with AI' : 'Write summary with AI'}</button>${has ? '<button class="btn small" data-act="clearSummary">Clear</button>' : ''}</div></div>
+      <textarea id="summaryBox" rows="4" placeholder="Press “Write summary with AI” for a short plain-English update, then edit it however you like. It goes into the email version.">${esc(state.summary || '')}</textarea>
+      <p class="muted" style="font-size:12px;margin:6px 0 14px">Written by Cloudflare Workers AI from the figures on this page. Check it before sending: you can edit the text, and your edits are kept until you regenerate.</p>
+      <div class="notes-head"><div><span class="eyebrow">Notes</span><b>Notes for this plan</b></div><span class="muted" style="font-size:12px">Saved for everyone using the site · included in the email version</span></div>
+      <textarea id="notesBox" rows="3" placeholder="e.g. Truck confirmed with Supagas for 10 pm. Brite CIPs planned Wed — expect extra use.">${esc(state.notes || '')}</textarea>
+    </div>`;
+  }
+
+  // plain-text facts handed to the AI: every number comes from the model, the AI only words it
+  function factsText() {
+    const ns = nextStatus(), p = ns.p, sim = C.sim, set = S(), L = [];
+    L.push(`Site: Balter Brewing CO2 bulk vessel, ${set.cap} t capacity, deliveries of ${set.load} t arrive at 10 pm on the delivery date.`);
+    L.push(`Latest vessel reading: ${fP(C.startLevel)} (${fT(C.startLevel)}), ${C.lastLabel}.`);
+    L.push(`Levels that matter: comfort floor ${set.floor}%, production scale-back ${set.scale}%, production stops ${set.halt}%.`);
+    if (p) {
+      L.push(`Next delivery: ${fmtD(p.d)} at 10 pm, ${fT(p.add)}${p.ordered ? ', ORDER ALREADY PLACED' + (p.order.placed ? ' on ' + fmtD(p.order.placed) : '') : ', NOT YET ORDERED, order by ' + fmtD(p.orderBy)}.`);
+      L.push(`Expected level when it arrives: ${fP(p.before)} (${fT(p.before)}); after it: ${fP(p.after)}. In a heavy-use case the level on arrival could be as low as ${fP(Math.max(0, p.lowBefore), 0)}.`);
+    } else L.push(`No delivery needed before ${fmtD(C.end)}.`);
+    L.push(`Status line: ${ns.text}`);
+    if (sim.planned.length > 1) L.push('Following loads: ' + sim.planned.slice(1).map((x) => `${fmtD(x.d)} (${x.ordered ? 'ordered' : 'order by ' + fmtD(x.orderBy)})`).join('; ') + '.');
+    L.push(`Without any delivery: reaches ${set.floor}% on ${sim.floorDate ? fmtD(sim.floorDate) : 'not in the window'}, ${set.scale}% on ${sim.scaleDate ? fmtD(sim.scaleDate) : 'not in the window'}, ${set.halt}% on ${sim.haltDate ? fmtD(sim.haltDate) : 'not in the window'}.`);
+    const n7 = sim.rows.slice(0, 7), avg = n7.length ? n7.reduce((a, r) => a + r.use, 0) / n7.length : 0;
+    L.push(`Forecast use averages ${fT(avg)} per day over the next 7 days${C.act7 === null ? '' : '; measured use over the last week was ' + fT(C.act7) + ' per day'}. Typical daily forecast error is about ${fT(Math.max(0.6, C.model.sigma || C.model.loo || C.model.rmse))}.`);
+    const evs = state.events.filter((e) => M.diffDays(e.d, TODAY) <= 14 && M.diffDays(e.d, TODAY) >= -14).map((e) => `${fmtD(e.d)}: ${e.text}`);
+    if (evs.length) L.push('Recent site events: ' + evs.join('; ') + '.');
+    if ((state.notes || '').trim()) L.push('Manager notes: ' + state.notes.trim().replace(/\s+/g, ' '));
+    return L.join('\n');
+  }
+
   function renderUpdateRow() {
     const when = state.boardUpdated ? new Date(state.boardUpdated.at).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
     const status = C.lastBoard
@@ -240,17 +277,17 @@
     let when, relTxt, list;
     if (p) {
       when = fmtD(p.d); relTxt = rel(p.d);
-      const ordLine = p.ordered ? `<li><b>Order</b><span>Placed ${p.order.placed ? fmtD(p.order.placed) : ''} for ${fmtD(p.order.date)} ${p.order.when === 'night' ? 'night' : 'early morning'} <span class="muted">(${(+p.order.t).toFixed(0)} t)</span></span></li>` : `<li><b>Order by</b><span>${fmtD(p.orderBy)} <span class="muted">(${plural(set.lead, 'day')} notice)</span></span></li>`;
+      const ordLine = p.ordered ? `<li><b>Order</b><span>Placed ${p.order.placed ? fmtD(p.order.placed) : ''} for ${fmtD(p.order.date)} at 10 pm <span class="muted">(${(+p.order.t).toFixed(0)} t)</span></span></li>` : `<li><b>Order by</b><span>${fmtD(p.orderBy)} <span class="muted">(${plural(set.lead, 'day')} notice)</span></span></li>`;
       list = `
         ${ordLine}
         <li><b>Load</b><span>${fT(p.add)} <span class="muted">${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full 20 t load fits'}</span></span></li>
-        <li><b>Level on arrival</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
+        <li><b>Level on arrival (10 pm)</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
         <li><b>Hits ${set.floor}% floor</b><span>${sim.floorDate ? fmtD(sim.floorDate) : 'not in window'}${sim.floorDateLo && sim.floorDateLo < sim.floorDate ? ` <span class="muted">(as early as ${fmtD(sim.floorDateLo)})</span>` : ''}</span></li>
         <li><b>Scale back (${set.scale}%) if none</b><span>${sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window'}</span></li>
         <li><b>Production stops (${set.halt}%) if none</b><span>${sim.haltDate ? fmtD(sim.haltDate) : 'not in window'}</span></li>`;
     } else {
       when = 'None needed'; relTxt = `to ${fmtS(C.end)}`;
-      list = `<li><b>Lowest level</b><span>${fP(Math.min(...sim.rows.map((r) => r.e)))} before ${fmtD(C.end)}</span></li>`;
+      list = `<li><b>Lowest level</b><span>${fP(Math.min(...sim.rows.map((r) => r.pre)))} before ${fmtD(C.end)}</span></li>`;
     }
     const gauge = vesselSVG(C.startLevel);
     const next7 = sim.rows.slice(0, 7); const avg7 = next7.length ? next7.reduce((s, r) => s + r.use, 0) / next7.length : 0;
@@ -278,6 +315,7 @@
           </div>
         </div>
       </div>
+      ${renderNotes()}
       ${renderUpdateRow()}
       ${renderSchedule()}
       ${renderOrders()}
@@ -289,7 +327,7 @@
     const rows = pl.map((x, i) => {
       const left = M.diffDays(TODAY, x.orderBy);
       const chip = x.ordered ? `<span class="chip st-ok"><i></i>Ordered</span>${x.before < S().floor ? ' <span class="chip st-watch"><i></i>Low on arrival</span>' : ''}` : x.tooLate ? '<span class="chip st-risk"><i></i>Needed before your order lands</span>' : left < 0 ? '<span class="chip st-risk"><i></i>Overdue</span>' : left === 0 ? '<span class="chip st-order"><i></i>Order today</span>' : left <= 2 ? '<span class="chip st-watch"><i></i>Soon</span>' : '<span class="chip st-ok"><i></i>On track</span>';
-      return `<tr><td>${i + 1}</td><td class="sticky-col2"><b>${fmtD(x.d)}</b><small>${rel(x.d)}${x.ordered && x.order.when === 'night' ? ' · ordered for ' + fmtS(x.order.date) + ' night' : ''}</small></td><td>${x.ordered ? 'Placed' + (x.order.placed ? ' ' + fmtS(x.order.placed) : '') : fmtD(x.orderBy)}</td><td class="r num">${fP(x.before)}<small>${fT(x.before)}</small></td><td class="r num">${fP(x.after)}<small>${fT(x.after)}</small></td><td class="r num">${fT(x.add)}${x.partial ? '<small>part load</small>' : ''}</td><td>${chip}</td></tr>`;
+      return `<tr><td>${i + 1}</td><td class="sticky-col2"><b>${fmtD(x.d)}</b><small>${rel(x.d)}${x.ordered ? ' · 10 pm' : ''}</small></td><td>${x.ordered ? 'Placed' + (x.order.placed ? ' ' + fmtS(x.order.placed) : '') : fmtD(x.orderBy)}</td><td class="r num">${fP(x.before)}<small>${fT(x.before)}</small></td><td class="r num">${fP(x.after)}<small>${fT(x.after)}</small></td><td class="r num">${fT(x.add)}${x.partial ? '<small>part load</small>' : ''}</td><td>${chip}</td></tr>`;
     }).join('');
     return `<div class="panel" style="margin-top:14px">
       <div class="pad" style="padding-bottom:6px"><b>Delivery schedule to ${fmtD(C.end)}</b> <span class="muted" style="font-size:12px">· assumes each load lands on the day shown and the plan on the board is followed</span></div>
@@ -302,16 +340,15 @@
   /* ---------- orders ---------- */
   function renderOrders() {
     const set = S();
-    const arr = (o) => (o.when === 'night' ? M.addDays(o.date, 1) : o.date);
+    const arr = (o) => o.date;
     const list = state.orders.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((o) => {
       const gone = arr(o) < C.startDate;
-      return `<tr class="${gone ? 'hist' : ''}"><td class="sticky-col">${fmtD(o.date)}</td><td>${o.when === 'night' ? 'Overnight (lands early ' + fmtS(M.addDays(o.date, 1)) + ')' : 'Early morning'}</td><td class="r num">${(+o.t).toFixed(1)} t</td><td>${o.placed ? fmtD(o.placed) : ''}</td><td>${esc(o.note || '')}</td><td>${gone ? '<span class="chip plain"><i></i>Should have arrived</span>' : '<span class="chip st-ok"><i></i>Counted in forecast</span>'}</td><td class="r"><button class="btn small x" data-act="delOrder" data-id="${esc(o.id)}" aria-label="Delete order">×</button></td></tr>`;
+      return `<tr class="${gone ? 'hist' : ''}"><td class="sticky-col">${fmtD(o.date)}</td><td>10 pm that evening</td><td class="r num">${(+o.t).toFixed(1)} t</td><td>${o.placed ? fmtD(o.placed) : ''}</td><td>${esc(o.note || '')}</td><td>${gone ? '<span class="chip plain"><i></i>Should have arrived</span>' : '<span class="chip st-ok"><i></i>Counted in forecast</span>'}</td><td class="r"><button class="btn small x" data-act="delOrder" data-id="${esc(o.id)}" aria-label="Delete order">×</button></td></tr>`;
     }).join('');
     return `<div class="panel" style="margin-top:14px" id="orders">
       <div class="pad" style="padding-bottom:6px"><b>Orders placed with Supagas</b> <span class="muted" style="font-size:12px">· a logged order is treated as arriving; the forecast then plans the load after it</span></div>
       <div class="pad" style="padding-top:6px"><div class="form-row">
         <label class="fld"><span>Delivery date</span><input type="date" id="orDate"></label>
-        <label class="fld"><span>Truck arrives</span><select id="orWhen"><option value="night">Overnight (lands early next morning)</option><option value="am">Early morning of that date</option></select></label>
         <label class="fld" style="min-width:90px"><span>Quantity (t)</span><input type="number" id="orT" step="0.1" min="1" value="${set.load}"></label>
         <label class="fld"><span>Order placed</span><input type="date" id="orPlaced" value="${TODAY}"></label>
         <label class="fld" style="flex:1;min-width:150px"><span>Note (optional)</span><input type="text" id="orNote" placeholder="PO / confirmation no."></label>
@@ -348,7 +385,7 @@
     const sim = C.sim;
     if (sim.rows.length) {
       const up = [`${x(C.startDate, FA)},${y(C.startLevel)}`], lo = [];
-      sim.rows.forEach((r) => { up.push(`${x(r.d, FP)},${y(r.hi)}`); lo.unshift(`${x(r.d, FP)},${y(r.lo)}`); });
+      sim.rows.forEach((r) => { up.push(`${x(r.d, FP)},${y(r.hi)}`); lo.unshift(`${x(r.d, FP)},${y(r.lo)}`); if (r.add) { up.push(`${x(r.d, 0.93)},${y(r.hiE)}`); lo.unshift(`${x(r.d, 0.93)},${y(r.loE)}`); } });
       lo.push(`${x(C.startDate, FA)},${y(C.startLevel)}`);
       g += `<polygon points="${up.concat(lo).join(' ')}" fill="#99D6EA" fill-opacity=".45"/>`;
     }
@@ -362,7 +399,7 @@
     // forecast line
     const fp = [];
     if (hp.length && C.latest && (C.latest.pm !== null || liveCur)) fp.push(hp[hp.length - 1].slice(0, 2));
-    sim.rows.forEach((r, i) => { if (!(i === 0 && liveCur)) fp.push([x(r.d, FA), y(r.s)]); fp.push([x(r.d, FP), y(r.e)]); });
+    sim.rows.forEach((r, i) => { if (!(i === 0 && liveCur)) fp.push([x(r.d, FA), y(r.s)]); fp.push([x(r.d, FP), y(r.pre)]); if (r.add) fp.push([x(r.d, 0.93), y(r.e)]); });
     if (fp.length) g += `<polyline points="${fp.map((p) => p[0] + ',' + p[1]).join(' ')}" fill="none" stroke="#7566A0" stroke-width="2.6" stroke-dasharray="7 5" stroke-linejoin="round"/>`;
     // deliveries received
     C.past.forEach((dv) => {
@@ -372,7 +409,7 @@
     });
     // planned deliveries
     sim.planned.forEach((p) => {
-      const cx = x(p.d, FA), cy = y(p.after);
+      const cx = x(p.d, 0.93), cy = y(p.after);
       g += `<path d="M${cx},${cy - 9} l8,9 -8,9 -8,-9 z" fill="${p.ordered ? '#7566A0' : '#FDAA63'}" stroke="#000" stroke-width="1.5"/>`;
       const anchor = cx > W - 140 ? 'end' : 'start';
       g += `<text class="lbl" x="${cx + (anchor === 'end' ? -12 : 12)}" y="${cy - 12}" text-anchor="${anchor}">${p.ordered ? 'Ordered' : 'Deliver'} ${fmtD(p.d)}</text>`;
@@ -383,7 +420,7 @@
     tips = {};
     hist.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b><br>${r.cur && r.pm === null ? 'Now (' + r.cur.h + ') ' + fP(r.cur.v) + ' (' + fT(r.cur.v) + ')<br>' : ''}${r.am !== null ? 'Morning ' + fP(r.am) + ' (' + fT(r.am) + ')<br>' : ''}${r.pm !== null ? 'Evening ' + fP(r.pm) + ' (' + fT(r.pm) + ')' : ''}`; });
     C.past.forEach((dv) => { tips[dv.d] = (tips[dv.d] || '') + `<br><span style="color:#47D7AC">▲ Delivery received ≈ ${dv.t.toFixed(0)} t</span>`; });
-    sim.rows.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b> · forecast<br>Use ${fT(r.use)} (${fP(r.use)})<br>Start ${fP(r.s)} → end ${fP(r.e)} (${fT(r.e)})${r.add ? '<br><span style="color:#FDAA63">◆ Delivery +' + fT(r.add) + '</span>' : ''}<br><span style="opacity:.7">90% range at end ${fP(r.lo, 0)}–${fP(r.hi, 0)}</span>`; });
+    sim.rows.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b> · forecast<br>Use ${fT(r.use)} (${fP(r.use)})<br>Start ${fP(r.s)} → end ${fP(r.pre)} (${fT(r.pre)})${r.add ? '<br><span style="color:#FDAA63">◆ 10 pm delivery +' + fT(r.add) + ' → ' + fP(r.e) + '</span>' : ''}<br><span style="opacity:.7">90% range at end ${fP(r.lo, 0)}–${fP(r.hi, 0)}</span>`; });
     const plotX = [x(first, 0), x(last, 1)];
     g += `<rect id="lvlHit" x="${plotX[0]}" y="${T}" width="${plotX[1] - plotX[0]}" height="${H - T - B}" fill="transparent"/>`;
     const svg = `<svg class="chart" id="lvlChart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Vessel level history and forecast" data-first="${first}" data-last="${last}" data-l="${L}" data-r="${R}" data-w="${W}">${g}</svg>`;
@@ -402,9 +439,9 @@
       const notes = [];
       if (i === 0 && C.frac0 < 1) notes.push('<span class="chip info"><i></i>Rest of today</span>');
       if (r.add) notes.push(`<span class="chip st-ok"><i></i>Delivery +${fT(r.add)}</span>`);
-      if (r.e < set.floor && !r.add) notes.push('<span class="chip st-order"><i></i>Below floor</span>');
-      if (!r.add && r.e < 0) notes.push('<span class="chip st-risk"><i></i>Empty</span>');
-      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.e < set.floor && !r.add ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num">${fP(r.s)} → <b>${fP(r.e)}</b><small>${fT(r.e)} left</small></td><td>${notes.join(' ')}</td></tr>`;
+      if (r.pre < set.floor) notes.push('<span class="chip st-order"><i></i>Below floor</span>');
+      if (r.pre < 0) notes.push('<span class="chip st-risk"><i></i>Empty</span>');
+      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 10 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
     }).join('');
     const nOv = Object.keys(state.overrides).filter((d) => (state.overrides[d] || []).some((v) => v !== null && v !== undefined)).length;
     return `<section class="sec" id="forecast">
@@ -719,7 +756,7 @@
     const ns = nextStatus(), p = ns.p, sim = C.sim;
     const lines = ['CO2 delivery request — Balter Brewing'];
     if (p) {
-      lines.push(`Deliver: ${fmtD(p.d)} — 1 × ${fT(p.add, 0)} load${p.partial ? ' (part load fits)' : ''}`);
+      lines.push(`Deliver: ${fmtD(p.d)}, 10 pm — 1 × ${fT(p.add, 0)} load${p.partial ? ' (part load fits)' : ''}`);
       lines.push(`Order by: ${fmtD(p.orderBy)}`);
       lines.push(`Expected level on arrival: ${fP(p.before)} (${fT(p.before)})`);
     } else lines.push(`No delivery needed before ${fmtD(C.end)}.`);
@@ -746,10 +783,10 @@
     let card;
     if (p) {
       const li = (k, v) => `<tr><td valign="top" style="padding:3px 14px 3px 0;${F}font-size:13px;font-weight:600;color:${INK};white-space:nowrap">${k}</td><td style="padding:3px 0;${F}font-size:13px;color:${INK}">${v}</td></tr>`;
-      const ordered = p.ordered ? li('Order', `Placed ${p.order.placed ? fmtD(p.order.placed) : ''} — truck ${p.order.when === 'night' ? 'overnight, landing early ' + fmtD(M.addDays(p.order.date, 1)) : 'early morning'} (${(+p.order.t).toFixed(0)} t)`) : li('Order by', `${fmtD(p.orderBy)} (${plural(set.lead, 'day')} notice)`);
+      const ordered = p.ordered ? li('Order', `Placed ${p.order.placed ? fmtD(p.order.placed) : ''} — truck at 10 pm (${(+p.order.t).toFixed(0)} t)`) : li('Order by', `${fmtD(p.orderBy)} (${plural(set.lead, 'day')} notice)`);
       card = `${eyebrow(p.ordered ? 'Next delivery · ordered' : 'Next delivery')}
         <div style="${F}font-size:30px;font-weight:700;color:${INK};line-height:1.15">${fmtD(p.d)}</div>
-        <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · early-morning truck'}</div>
+        <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · 10 pm truck'}</div>
         <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Load', `${fT(p.add)} ${p.partial ? '— only part of this load fits' : p.ordered ? '— all of it fits' : '— a full load fits'}`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Scale back (' + set.scale + '%) if none', sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window')}${li('Production stops (' + set.halt + '%) if none', sim.haltDate ? fmtD(sim.haltDate) : 'not in window')}</table>
         <div style="${F}font-size:13px;font-weight:600;color:${INK};padding-top:10px">${esc(ns.text)}</div>`;
     } else card = `${eyebrow('Next delivery')}<div style="${F}font-size:26px;font-weight:700;color:${INK}">None needed</div><div style="${F}font-size:13px;color:${MUTE};padding-top:4px">The vessel stays above the ${set.floor}% floor to ${fmtD(C.end)}.</div>`;
@@ -757,7 +794,7 @@
     // forecast level chart — bars built from table cells
     const days = sim.rows.slice(0, 21), H = 120;
     const cols = days.map((r) => {
-      const e = Math.max(0, Math.min(100, r.e)), h = Math.round(e / 100 * H), col = r.add ? '#FDAA63' : r.e < set.floor ? '#F5A08A' : '#FFD637';
+      const e = Math.max(0, Math.min(100, r.e)), h = Math.round(e / 100 * H), col = r.add ? '#FDAA63' : r.pre < set.floor ? '#F5A08A' : '#FFD637';
       const dd = +r.d.slice(8);
       return `<td valign="bottom" align="center" style="padding:0 1px"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="${H - h}" style="font-size:1px;line-height:1px;height:${H - h}px">&nbsp;</td></tr><tr><td height="${h}" bgcolor="${col}" style="font-size:1px;line-height:1px;height:${h}px;background:${col};border-radius:3px 3px 0 0">&nbsp;</td></tr></table></td>`;
     }).join('');
@@ -774,7 +811,7 @@
 
     // what's planned
     const use = sim.rows.slice(0, 10), tr = (r) => { const b = state.board[r.d] || [0, 0, 0, 0, 0]; const ov = state.overrides[r.d] || []; const v = (k) => (ov[k] !== null && ov[k] !== undefined ? ov[k] : b[k]); return [v(0), v(1), v(2), v(3), v(4)]; };
-    const useTbl = `<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${th('Day')}${th('70HL', 1)}${th('300HL', 1)}${th('500HL', 1)}${th('Cartons', 1)}${th('Kegs', 1)}${th('Forecast use', 1)}${th('End level', 1)}</tr>${use.map((r) => { const q = tr(r); return `<tr>${td(fmtD(r.d), 0, 1)}${td(q[0] || '–', 1)}${td(q[1] || '–', 1)}${td(q[2] || '–', 1)}${td(q[3] ? q[3].toLocaleString('en-AU') : '–', 1)}${td(q[4] || '–', 1)}${td(fT(r.use) + ' <span style="color:' + MUTE + '">(' + fP(r.use) + ')</span>', 1)}${td(fP(r.e, 0) + (r.add ? ' <span style="color:#E0782A;font-weight:700">▲</span>' : ''), 1)}</tr>`; }).join('')}</table>`;
+    const useTbl = `<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${th('Day')}${th('70HL', 1)}${th('300HL', 1)}${th('500HL', 1)}${th('Cartons', 1)}${th('Kegs', 1)}${th('Forecast use', 1)}${th('End level', 1)}</tr>${use.map((r) => { const q = tr(r); return `<tr>${td(fmtD(r.d), 0, 1)}${td(q[0] || '–', 1)}${td(q[1] || '–', 1)}${td(q[2] || '–', 1)}${td(q[3] ? q[3].toLocaleString('en-AU') : '–', 1)}${td(q[4] || '–', 1)}${td(fT(r.use) + ' <span style="color:' + MUTE + '">(' + fP(r.use) + ')</span>', 1)}${td(fP(r.pre, 0) + (r.add ? ' <span style="color:#E0782A;font-weight:700">▲</span>' : ''), 1)}</tr>`; }).join('')}</table>`;
 
     const GAP = '<div style="height:18px;line-height:18px;font-size:1px">&nbsp;</div>';
     const box = (inner, extra) => `${GAP}<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${LINE};border-radius:12px"><tr><td style="padding:14px 16px;${extra || ''}">${inner}</td></tr></table>`;
@@ -785,8 +822,10 @@
       <div style="${F}font-size:12px;color:${MUTE};padding-bottom:10px">Prepared ${stamp} · ${esc(C.lastLabel)} · 30 t vessel, 20 t loads</div>
       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${stCol[1]};border-left:6px solid ${stCol[1]};border-radius:12px;background:${stCol[0]}" bgcolor="${stCol[0]}"><tr><td style="padding:16px 18px">${card}</td></tr></table>
       ${GAP}<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${kpi('Vessel now', fT(C.startLevel) + ' <span style="font-size:12px;color:' + MUTE + ';font-weight:600">' + fP(C.startLevel) + '</span>', esc(C.lastLabel), '#FFD637')}${kpi('Forecast use / day', fT(avg7), 'Next 7 planned days', '#47D7AC')}${kpi('Actual use / day', C.act7 === null ? '–' : fT(C.act7), 'Last week measured', '#7566A0')}${kpi('Typical miss', '± ' + fT(err), 'per day', '#99D6EA')}</tr></table>
+      ${state.summary && state.summary.trim() ? box(eyebrow('Summary') + `<div style="${F}font-size:13px;line-height:1.55;color:${INK}">${esc(state.summary.trim()).replace(/\n/g, '<br>')}</div>`) : ''}
+      ${state.notes && state.notes.trim() ? box(eyebrow('Notes') + `<div style="${F}font-size:13px;line-height:1.55;color:${INK}">${esc(state.notes.trim()).replace(/\n/g, '<br>')}</div>`) : ''}
       ${days.length ? box(eyebrow('Forecast') + `<div style="${F}font-size:15px;font-weight:700;padding-bottom:10px">Vessel level, day by day</div>` + chart) : ''}
-      ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">Delivery schedule to ${fmtD(C.end)}</div>` + sched + `<div style="${F}font-size:11px;color:${MUTE};padding-top:8px">Assumes each load lands early on the day shown, before that day's use, and the Live Brewery Board plan is followed.</div>`)}
+      ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">Delivery schedule to ${fmtD(C.end)}</div>` + sched + `<div style="${F}font-size:11px;color:${MUTE};padding-top:8px">Assumes each truck arrives at 10 pm on the day shown, after that day's use, and the Live Brewery Board plan is followed.</div>`)}
       ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">What's planned — next ${use.length} days</div>` + useTbl)}
       <div style="${F}font-size:11px;color:${MUTE};padding-top:12px;line-height:1.5">Forecast built from transfers (70/300/500 HL), packaging cartons and kegs on the Live Brewery Board, fitted to daily gauge readings. Brite CIPs are not tracked separately, so allow about ± ${fT(err)} per day.</div>
     </div>`;
@@ -847,6 +886,10 @@
       save(); render();
     } else if (t.classList.contains('rd')) {
       setReading(t.dataset.d, t.dataset.f, num(t.value)); save(); render();
+    } else if (t.id === 'summaryBox') {
+      state.summary = t.value.replace(/\s+$/, ''); save(); toast('Summary saved');
+    } else if (t.id === 'notesBox') {
+      state.notes = t.value.replace(/\s+$/, ''); save(); toast('Notes saved');
     } else if (t.classList.contains('set')) {
       const v = num(t.value); if (v !== null) { state.settings[t.dataset.k] = v; save(); render(); }
     } else if (t.classList.contains('dow')) {
@@ -858,7 +901,7 @@
 
   app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.closest('#quick')) { e.preventDefault(); app.querySelector('[data-act=quickSave]').click(); } });
   app.addEventListener('input', (e) => { if (e.target.id === 'qDate') quickDateTouched = true; });
-  app.addEventListener('click', (e) => {
+  app.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]'); if (!b) return;
     const a = b.dataset.act;
     if (a === 'saveReading') {
@@ -903,10 +946,10 @@
       const d = $('#orDate').value, t = num($('#orT').value);
       if (!d) return toast('Pick the delivery date');
       if (!t || t <= 0) return toast('Enter the quantity in tonnes');
-      state.orders.push({ id: 'o' + Date.now(), date: d, when: $('#orWhen').value, t, placed: $('#orPlaced').value || TODAY, note: $('#orNote').value.trim() });
+      state.orders.push({ id: 'o' + Date.now(), date: d, when: 'pm', t, placed: $('#orPlaced').value || TODAY, note: $('#orNote').value.trim() });
       save(); render(); toast(`Order logged for ${fmtD(d)}`);
     } else if (a === 'logOrder') {
-      state.orders.push({ id: 'o' + Date.now(), date: b.dataset.d, when: 'am', t: S().load, placed: TODAY, note: '' });
+      state.orders.push({ id: 'o' + Date.now(), date: b.dataset.d, when: 'pm', t: S().load, placed: TODAY, note: '' });
       save(); render(); toast(`Order logged for ${fmtD(b.dataset.d)}`);
     } else if (a === 'addEvent') {
       const d = $('#evDate').value, t = $('#evText').value.trim(); if (!d || !t) return toast('Enter a date and a short note');
@@ -914,6 +957,15 @@
     } else if (a === 'delEvent') { state.events = state.events.filter((x) => x.id !== b.dataset.id); (state.removedEvents = state.removedEvents || []).push(b.dataset.id); save(); render();
     } else if (a === 'delOrder') { state.orders = state.orders.filter((o) => o.id !== b.dataset.id); save(); render(); }
     else if (a === 'resetOv') { state.overrides = {}; save(); render(); toast('Plan changes cleared'); }
+    else if (a === 'aiSummary') {
+      const btn = b; btn.disabled = true; const old = btn.textContent; btn.textContent = 'Writing…';
+      try {
+        const r = await fetch('/api/summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ facts: factsText() }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.text) throw new Error(j.error || (r.status === 501 || r.status === 404 ? 'AI summary only works on the deployed Cloudflare site' : 'Request failed (' + r.status + ')'));
+        state.summary = j.text; save(); render(); toast('Summary written — edit it if you like');
+      } catch (err) { btn.disabled = false; btn.textContent = old; toast(err.message); }
+    } else if (a === 'clearSummary') { state.summary = ''; save(); render(); }
     else if (a === 'pickLbb') $('#lbbFile').click();
     else if (a === 'defaults') { state.settings = { ...DEFAULTS }; save(); render(); toast('Settings reset'); }
     else if (a === 'import') $('#jsonFile').click();
@@ -961,7 +1013,7 @@
     try {
       const j = JSON.parse(await f.text());
       if (!Array.isArray(j.readings) || typeof j.board !== 'object') throw new Error('not a Balter CO2 export');
-      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], events: j.events || [], invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
+      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], events: j.events || [], notes: typeof j.notes === 'string' ? j.notes : (state.notes || ''), summary: typeof j.summary === 'string' ? j.summary : (state.summary || ''), invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
       save(); render(); toast('Data imported');
     } catch (err) { toast('Could not import: ' + err.message); }
   });

@@ -157,11 +157,12 @@
     const run = (withDeliveries) => {
       let lvl = startLevel; const rows = [];
       days.forEach((x, i) => {
-        let add = 0;
-        if (withDeliveries && del.has(i)) add = Math.min(typeof del.get(i) === 'number' ? del.get(i) : cfg.loadPct, Math.max(0, cfg.maxFill - lvl));
-        const s = lvl + add, e = s - use[i].total, k = i + 1;
-        rows.push({ d: x.d, s, e, add, use: use[i].total, parts: use[i].parts,
-                    lo: e - cfg.z * sigma * Math.sqrt(k), hi: Math.min(100, e + cfg.z * sigma * Math.sqrt(k)) });
+        // trucks arrive at 10 pm on the delivery date: the day's use comes first, then the load goes in
+        const pre = lvl - use[i].total; let add = 0;
+        if (withDeliveries && del.has(i)) add = Math.min(typeof del.get(i) === 'number' ? del.get(i) : cfg.loadPct, Math.max(0, cfg.maxFill - pre));
+        const e = pre + add, k = i + 1, band = cfg.z * sigma * Math.sqrt(k);
+        rows.push({ d: x.d, s: lvl, pre, e, add, use: use[i].total, parts: use[i].parts,
+                    lo: pre - band, hi: Math.min(100, pre + band), loE: e - band, hiE: Math.min(100, e + band) });
         lvl = e;
       });
       return rows;
@@ -170,24 +171,23 @@
     const bare = run(false);
     const firstBelow = (rows, key, lim) => rows.findIndex((r) => r[key] < lim);
     const iScale = firstBelow(bare, 'e', cfg.scale || 10), iHalt = firstBelow(bare, 'e', cfg.halt || 5), iFloor = firstBelow(bare, 'e', cfg.floor), iFloorLo = firstBelow(bare, 'lo', cfg.floor), iEmpty = firstBelow(bare, 'e', 0);
-    const iFits = bare.findIndex((r) => r.s <= cfg.maxFill - cfg.loadPct + 1e-9);
+    const iFits = bare.findIndex((r) => r.pre <= cfg.maxFill - cfg.loadPct + 1e-9);
     // Plan deliveries
     let guard = 0, rows = bare;
     while (guard++ < 12) {
       rows = run(true);
-      const from = orderMap.size ? Math.min(...orderMap.keys()) : 0;      // days before the first placed order are covered by that order
-      const i = rows.findIndex((r, k) => k >= from && r.e < cfg.floor);
+      const from = orderMap.size ? Math.min(...orderMap.keys()) : -1;     // days up to the first placed order are covered by that order
+      const i = rows.findIndex((r, k) => k > from && r.pre < cfg.floor);
       if (i < 0) break;
-      let j = i; while (j >= 0 && !allowed(days[j].d)) j--;
+      let j = i - 1; while (j >= 0 && !allowed(days[j].d)) j--;           // a 10 pm truck must land on the day before the breach (or earlier)
       if (j < 0 || del.has(j)) { rows[i].short = true; break; }     // cannot be fixed within the horizon
       del.set(j, true);
     }
     const planned = [];
     rows.forEach((r, i) => {
       if (r.add > 0) {
-        const nextNeed = rows.findIndex((q, k) => k >= i && q.e < cfg.floor + 0);
         const ord = orderMap.get(i);
-        planned.push({ i, d: r.d, before: r.s - r.add, after: r.s, add: r.add, lowBefore: i > 0 ? rows[i - 1].lo : startLevel,
+        planned.push({ i, d: r.d, before: r.pre, after: r.e, add: r.add, lowBefore: r.lo,
                        orderBy: addDays(r.d, -cfg.lead), partial: r.add < (ord ? ord.pts : cfg.loadPct) - 0.5, ordered: !!ord, order: ord ? ord.ref : null });
       }
     });

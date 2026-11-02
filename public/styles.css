@@ -228,3 +228,10 @@ td.num{white-space:nowrap}
 .modal-subj{padding:8px 18px;font-size:12.5px;background:var(--purple-soft)}
 .modal-body{overflow:auto;padding:18px}
 @media print{.modal{display:none}}
+
+.notes{margin-top:14px}
+.notes-head{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.notes-head b{display:block;font-size:15px}
+.notes textarea{width:100%;font:inherit;font-size:14px;line-height:1.5;padding:10px 12px;border:1px solid var(--line);border-radius:10px;resize:vertical;min-height:72px;background:#fff;color:#000}
+.notes textarea:focus{outline:2px solid var(--purple);outline-offset:1px}
+@media print{.notes textarea{border:0;padding:0}}
