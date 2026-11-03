@@ -235,3 +235,9 @@ td.num{white-space:nowrap}
 .notes textarea{width:100%;font:inherit;font-size:14px;line-height:1.5;padding:10px 12px;border:1px solid var(--line);border-radius:10px;resize:vertical;min-height:72px;background:#fff;color:#000}
 .notes textarea:focus{outline:2px solid var(--purple);outline-offset:1px}
 @media print{.notes textarea{border:0;padding:0}}
+
+tr.past td{background:#FBFAF6}
+tr.past td small{display:block;color:var(--muted);font-size:11px}
+tr.today-sep td{background:var(--purple-soft);color:var(--purple);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:5px 12px}
+
+table.sticky-head thead th{position:sticky;top:0;background:#fff;z-index:2;box-shadow:0 1px 0 var(--line)}

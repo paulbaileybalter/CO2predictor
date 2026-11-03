@@ -386,9 +386,21 @@
 
   /* ---------- level chart ---------- */
   let tips = {};
+  let chartBack = 28, planBack = 0;       // how far back (days) the chart and the plan table reach; 0 in planBack = hidden, 9999 = everything
+  const bt = { key: '', cache: {} };
+  // what the model would have predicted for a past day using only the readings available before it
+  function predictedAtTime(o) {
+    const key = (state.updated || 0) + '|' + C.q.obs.length + '|' + JSON.stringify(state.overrides).length;
+    if (bt.key !== key) { bt.key = key; bt.cache = {}; }
+    const ck = o.d; if (ck in bt.cache) return bt.cache[ck];
+    const train = C.q.obs.filter((x) => x.d < o.days[0]);
+    let v = null;
+    if (train.length >= 12) { const m = M.fit(train); if (m.ok) v = o.days.reduce((a, d) => a + M.predictDay(m, C.recFor(d)).total, 0) / o.days.length; }
+    return (bt.cache[ck] = v);
+  }
   function levelChart() {
     const W = 960, H = 380, L = 46, R = 20, T = 20, B = 38;
-    const first0 = M.addDays(C.startDate, -28), hist = C.q.rows.filter((r) => r.d >= first0), first = hist.length ? hist[0].d : C.startDate, last = C.end;
+    const first0 = chartBack ? M.addDays(C.startDate, -chartBack) : '0000-00-00', hist = C.q.rows.filter((r) => r.d >= first0), first = hist.length ? hist[0].d : C.startDate, last = C.end;
     const t0 = M.parse(first), t1 = M.parse(last) + 864e5;
     const x = (d, f) => L + ((M.parse(d) + f * 864e5) - t0) / (t1 - t0) * (W - L - R);
     const y = (v) => T + (1 - Math.max(0, Math.min(100, v)) / 100) * (H - T - B);
@@ -468,20 +480,41 @@
       if (r.add) notes.push(`<span class="chip st-ok"><i></i>Delivery +${ldT(r.add)}</span>`);
       if (r.pre < set.floor) notes.push('<span class="chip st-order"><i></i>Below floor</span>');
       if (r.pre < 0) notes.push('<span class="chip st-risk"><i></i>Empty</span>');
-      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 10 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
+      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num muted">–</td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 10 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
     }).join('');
+    // past days: what was predicted at the time vs what actually happened
+    const actualOn = {}; C.hist.forEach((o) => o.days.forEach((d) => { actualOn[d] = { a: o.use / o.n, n: o.n, o }; }));
+    const rdOn = {}; C.q.rows.forEach((r) => { rdOn[r.d] = r; });
+    const delOn = {}; C.past.forEach((x) => { delOn[x.d] = x; });
+    const pastDays = planBack ? M.range(planBack >= 9999 ? (C.q.rows[0] ? C.q.rows[0].d : C.startDate) : M.addDays(C.startDate, -planBack), M.addDays(C.startDate, -1)) : [];
+    const pastHtml = pastDays.map((d) => {
+      const rec = C.recFor(d), a = actualOn[d], rd = rdOn[d], dv = delOn[d], ev = state.events.filter((e) => e.d === d);
+      const pr = a ? predictedAtTime(a.o) : null;
+      const wk = [0, 6].includes(M.dow(d));
+      const diff = a && pr !== null ? a.a - pr : null;
+      const lv = rd ? `${rd.am !== null ? fP(rd.am) : '–'} → <b>${rd.pm !== null ? fP(rd.pm) : '–'}</b>` : '–';
+      const notes = [];
+      if (dv) notes.push(`<span class="chip st-ok"><i></i>Delivery ≈ ${(dv.pts * C.kgPt / 1000).toFixed(1)} t</span>`);
+      if (a && a.n > 1) notes.push(`<span class="chip plain"><i></i>avg of ${a.n} days</span>`);
+      ev.forEach((e) => notes.push(`<span class="chip st-watch" title="${esc(e.text)}"><i></i>${esc(e.text.length > 28 ? e.text.slice(0, 26) + '…' : e.text)}</span>`));
+      const bigMiss = diff !== null && Math.abs(diff) > 1.5;
+      return `<tr class="past${wk ? ' wk' : ''}"><td class="sticky-col">${fmtD(d)}</td>${rec.map((v, k) => `<td class="r num muted">${k === 3 ? (v ? v.toLocaleString('en-AU') : '–') : v || '–'}</td>`).join('')}<td class="r num">${pr === null ? '–' : `${fT(pr)}<small>${fP(pr)} · as predicted then</small>`}</td><td class="r num">${a ? `<b>${fT(a.a)}</b><small>${fP(a.a)}${diff === null ? '' : ' · <span style="' + (bigMiss ? 'font-weight:700;color:#000' : '') + '">' + (diff > 0 ? '+' : '−') + fT(Math.abs(diff)) + (diff > 0 ? ' over' : ' under') + '</span>'}</small>` : '–'}</td><td class="r num">${lv}</td><td>${notes.join(' ')}</td></tr>`;
+    }).join('');
+    const todayRow = pastHtml ? `<tr class="today-sep"><td colspan="10">▼ From here: forecast</td></tr>` : '';
     const nOv = Object.keys(state.overrides).filter((d) => (state.overrides[d] || []).some((v) => v !== null && v !== undefined)).length;
     return `<section class="sec" id="forecast">
       <div class="sec-head"><div><span class="eyebrow">Forecast</span><h2>Vessel level, day by day</h2>
         <p>Black line = readings, purple dashed = forecast with its 90% range (blue). Change any number in the table below to test a what-if; it recalculates straight away.</p></div></div>
       <div class="panel">
+        <div class="pad" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;padding-bottom:0"><span class="muted" style="font-size:12px">Show past:</span><div class="segs">${[[14, '2 wks'], [28, '4 wks'], [56, '8 wks'], [0, 'All']].map(([v, l]) => `<button type="button" class="seg${chartBack === v ? ' on' : ''}" data-act="chartBack" data-v="${v}">${l}</button>`).join('')}</div></div>
         <div class="chart-wrap" id="lvlWrap">${levelChart()}<div class="tip" id="tip"></div></div>
         <div class="legend"><span><i class="line"></i>Readings</span><span><i class="dash" style="border-top-color:#7566A0"></i>Forecast</span><span><i style="background:#99D6EA"></i>90% range</span><span><i style="background:#7566A0"></i>Ordered</span><span><i style="background:#FDAA63"></i>Suggested delivery</span><span><i style="background:#47D7AC"></i>Delivery received</span><span><i class="dash"></i>Reorder floor</span><span><i style="background:#E0782A"></i>Scale back 10%</span><span><i style="background:#C0392B"></i>Stop 5%</span></div>
       </div>
       <div class="panel" style="margin-top:14px">
         <div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between"><div><b>Plan &amp; predicted use</b> <span class="muted" style="font-size:12px">· transfers counted per tank, cartons and kegs from the board</span></div>
-          ${nOv ? `<button class="btn small" data-act="resetOv">Reset ${plural(nOv, 'changed day')}</button>` : ''}</div>
-        <div class="tbl-wrap"><table><thead><tr><th>Date</th><th class="r">70HL</th><th class="r">300HL</th><th class="r">500HL</th><th class="r">Cartons</th><th class="r">Kegs</th><th class="r">Predicted use</th><th class="r">Level start → end</th><th></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+          <div class="row"><span class="muted" style="font-size:12px">Show past days:</span><div class="segs">${[[0, 'Hide'], [14, '2 wks'], [28, '4 wks'], [9999, 'All']].map(([v, l]) => `<button type="button" class="seg${planBack === v ? ' on' : ''}" data-act="planBack" data-v="${v}">${l}</button>`).join('')}</div>
+          ${nOv ? `<button class="btn small" data-act="resetOv">Reset ${plural(nOv, 'changed day')}</button>` : ''}</div></div>
+        <div class="tbl-wrap" id="planWrap" style="${planBack ? 'max-height:560px;overflow:auto' : ''}"><table class="sticky-head"><thead><tr><th>Date</th><th class="r">70HL</th><th class="r">300HL</th><th class="r">500HL</th><th class="r">Cartons</th><th class="r">Kegs</th><th class="r">Predicted use</th><th class="r">Actual use</th><th class="r">Level start → end</th><th></th></tr></thead><tbody>${pastHtml}${todayRow}${rowsHtml}</tbody></table></div>
         <div class="note" style="padding-top:10px">Orange boxes are your what-if changes. Weekends are shaded. Level is shown as % of the ${set.cap} t vessel.</div>
       </div>
     </section>`;
@@ -748,6 +781,7 @@
     $('#app').innerHTML = renderHero() + renderForecast() + renderDrivers() + renderInvoices() + renderReadings() + renderSettings();
     window.scrollTo(0, y);
     bindChart();
+    const pw = $('#planWrap'); if (pw && planBack) { const sep = pw.querySelector('.today-sep'); if (sep) pw.scrollTop = Math.max(0, sep.offsetTop - 86); }   // open on today, past days above
   }
 
   function bindChart() {
@@ -958,6 +992,8 @@
       const lines = [head.join(',')].concat(C.inv.out.map((x) => [x.date, q(x.docket), x.kg, x.ex.toFixed(2), x.rate.toFixed(4), x.gaugeKg === null ? '' : Math.round(x.gaugeKg), x.diff === null ? '' : Math.round(x.diff), q(STATUS[x.status][1]), q(x.note)].join(',')));
       const el = document.createElement('a'); el.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); el.download = 'balter-co2-invoices-vs-gauge.csv'; el.click(); setTimeout(() => URL.revokeObjectURL(el.href), 2000);
     }
+    else if (a === 'planBack') { planBack = +b.dataset.v; render(); }
+    else if (a === 'chartBack') { chartBack = +b.dataset.v; render(); }
     else if (a === 'qType') {
       quickType = b.dataset.t;
       app.querySelectorAll('#quick .seg').forEach((x) => x.classList.toggle('on', x === b));
