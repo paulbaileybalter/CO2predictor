@@ -310,6 +310,7 @@
       const x = 42 + (i * 37) % 76, r = 2 + (i % 3), d = (i * 0.9).toFixed(1), y = yB - 6 - (i * 13) % 18;
       bubbles += `<circle class="vb" cx="${x}" cy="${y}" r="${r}" fill="#fff" fill-opacity=".7" style="animation-delay:${d}s;animation-duration:${4 + (i % 4)}s"/>`;
     }
+    const ty = Math.min(Math.max(yL + 36, 120), 190, yF - 24);      // keep the level figure clear of the floor label
     const wave = `M30,${yL} q12,-5 25,0 t25,0 t25,0 t25,0 V${yL + 9} H30 Z`;
     return `<svg class="vessel" viewBox="0 0 160 250" role="img" aria-label="Vessel level ${fP(lv)}">
       <defs><clipPath id="vclip"><path d="${body}"/></clipPath></defs>
@@ -323,9 +324,9 @@
       <path d="${body}" fill="none" stroke="#000" stroke-width="2.5"/>
       <line x1="46" y1="214" x2="40" y2="232" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
       <line x1="114" y1="214" x2="120" y2="232" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
-      <text x="80" y="${Math.min(Math.max(yL + 36, 120), 190)}" text-anchor="middle" font-size="26" font-weight="700">${lv.toFixed(0)}%</text>
-      <text x="80" y="${Math.min(Math.max(yL + 36, 120), 190) + 17}" text-anchor="middle" font-size="12" font-weight="500">${fT(lv)}</text>
-      <text x="134" y="${yF - 4}" font-size="9.5" font-weight="600" fill="#000">floor ${floor}%</text>
+      <text x="80" y="${ty}" text-anchor="middle" font-size="26" font-weight="700">${lv.toFixed(0)}%</text>
+      <text x="80" y="${ty + 17}" text-anchor="middle" font-size="12" font-weight="500">${fT(lv)}</text>
+      <text x="125" y="${yF - 4}" text-anchor="end" font-size="9" font-weight="600" fill="#000">floor ${floor}%</text>
     </svg>`;
   }
 
