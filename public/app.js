@@ -263,6 +263,43 @@
     </div>`;
   }
 
+
+  /* ---------- live "where are we right now" estimate ---------- */
+  const DAY_START = 6, DAY_END = 17;                       // working-day draw runs ~6am–5pm
+  const drawn = (h) => Math.min(1, Math.max(0, (h - DAY_START) / (DAY_END - DAY_START)));
+  function nowHours() {
+    const t = qs.get('time'); if (/^\d{1,2}:\d{2}$/.test(t || '')) { const [h, m] = t.split(':').map(Number); return h + m / 60; }
+    const n = new Date(); return n.getHours() + n.getMinutes() / 60;
+  }
+  function liveEstimate() {
+    if (!C || !C.model) return null;
+    const today = C.q.rows.find((r) => r.d === TODAY), prev = C.q.rows.filter((r) => r.d < TODAY && r.pm !== null).pop();
+    const h = nowHours();
+    if (today && today.pm !== null) return { done: true, level: today.pm };
+    const rec = C.recFor(TODAY), use = M.predictDay(C.model, rec).total;
+    let anchor, anchorH, label;
+    if (today && today.cur) { const [ch, cm] = today.cur.h.split(':').map(Number); anchor = today.cur.v; anchorH = ch + cm / 60; label = `live check ${today.cur.v}% at ${today.cur.h}`; }
+    else if (today && today.am !== null) { anchor = today.am; anchorH = DAY_START; label = `this morning's ${today.am}%`; }
+    else if (prev) { anchor = prev.pm; anchorH = DAY_START; label = `${fmtS(prev.d)} evening's ${prev.pm}%`; }
+    else return null;
+    const el = Math.max(0, drawn(h) - drawn(anchorH)), used = use * el;
+    const sig = Math.max(0.6, C.model.sigma || C.model.loo || C.model.rmse || 1), band = Z * sig * Math.sqrt(Math.max(el, 0.02));
+    const level = anchor - used;
+    return { done: false, level, lo: level - band, hi: Math.min(100, level + band), use, used, el, h, label, rec };
+  }
+  function liveTileHTML() {
+    const L = liveEstimate();
+    if (!L) return '';
+    if (L.done) return `<small>Right now</small><b>${fT(L.level)} <span>${fP(L.level)}</span></b><p>Day closed: evening reading is in.</p>`;
+    const hh = Math.floor(L.h), mm = String(Math.round((L.h - hh) * 60) % 60).padStart(2, '0'), ap = hh >= 12 ? 'pm' : 'am', h12 = ((hh + 11) % 12) + 1;
+    const rec = L.rec, bits = [rec[0] ? rec[0] + '×70HL' : '', rec[1] ? rec[1] + '×300HL' : '', rec[2] ? rec[2] + '×500HL' : '', rec[3] ? rec[3].toLocaleString('en-AU') + ' cartons' : '', rec[4] ? rec[4] + ' kegs' : ''].filter(Boolean).join(', ') || 'nothing on the board';
+    const pct = Math.round(drawn(L.h) * 100);
+    return `<small>Where we probably are · ${h12}:${mm} ${ap}</small><b>${fT(L.level)} <span>${fP(L.level)}</span></b>
+      <p>Likely ${fP(Math.max(0, L.lo), 0)}–${fP(L.hi, 0)}. Today's board (${esc(bits)}) forecasts ${fT(L.use)} for the day; about ${pct}% of the day's draw is done (${fT(L.used)}), counted from ${esc(L.label)}.</p>`;
+  }
+  function updateLive() { const el = $('#liveTile'); if (el) el.innerHTML = liveTileHTML(); }
+  setInterval(updateLive, 60000);
+
   /* ---------- hero ---------- */
   function vesselSVG(level) {
     const lv = Math.max(0, Math.min(100, level)), floor = S().floor;
@@ -335,7 +372,8 @@
         <div class="panel gauge-panel">
           <div>${gauge}</div>
           <div class="tiles">
-            <div class="tile t-gold"><small>Vessel now</small><b>${fT(C.startLevel)} <span>${fP(C.startLevel)}</span></b><p>${esc(C.lastLabel)}</p></div>
+            <div class="tile t-orange" id="liveTile" style="grid-column:1 / -1">${liveTileHTML()}</div>
+            <div class="tile t-gold"><small>Last reading</small><b>${fT(C.startLevel)} <span>${fP(C.startLevel)}</span></b><p>${esc(C.lastLabel)}</p></div>
             <div class="tile t-teal"><small>Forecast use / day</small><b>${fT(avg7)} <span>${fP(avg7)}</span></b><p>Average of the next 7 planned days</p></div>
             <div class="tile t-purple"><small>Actual use / day</small><b>${C.act7 === null ? '–' : fT(C.act7)} <span>${C.act7 === null ? '' : fP(C.act7)}</span></b><p>Measured over the last week</p></div>
             <div class="tile"><small>Typical miss</small><b>± ${fT(err)} <span>per day</span></b><p>Based on ${C.model.n} days of readings</p></div>
