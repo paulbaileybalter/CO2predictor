@@ -89,15 +89,18 @@ export default {
       if (body.length > 12000) return Response.json({ error: 'Too much data' }, { status: 413 });
       let facts = ''; try { facts = String(JSON.parse(body).facts || ''); } catch (e) { return Response.json({ error: 'Bad JSON' }, { status: 400 }); }
       if (facts.length < 20) return Response.json({ error: 'Nothing to summarise' }, { status: 400 });
-      const system = 'You write a short status update about the CO2 bulk-gas supply at Balter Brewing for production and supply managers. '
+      const system = 'You write a brief, matter-of-fact CO2 supply update for Balter Brewing production and supply staff. '
         + 'Use ONLY the facts provided. Copy numbers, dates and percentages exactly as written; never calculate, round or invent figures. '
-        + 'Write 4 to 6 plain sentences in Australian English, no headings, no bullet points, no markdown. '
-        + 'Lead with the delivery that matters most and whether it is safe, then the main risk and what (if anything) needs to be done and by when. '
-        + 'Mention production scale-back (10%) and production stop (5%) only if the facts show the vessel could get near them. Do not add advice beyond what the facts support.';
+        + 'Write 3 or 4 short plain sentences in Australian English: no headings, bullets, markdown or exclamation marks. '
+        + 'Sentence 1: the most recent delivery (date, estimated size in tonnes, level after it). '
+        + 'Sentence 2: where the vessel is now. '
+        + 'Sentence 3: the suggested next delivery date, whether it is already ordered, and the order-by date if not. '
+        + 'Keep the tone calm and neutral. Only mention a risk or the 10% / 5% production levels if the facts say the vessel could actually get close to them, and then in one measured clause. '
+        + 'Do not add advice or commentary beyond the facts.';
       try {
         const out = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
           messages: [{ role: 'system', content: system }, { role: 'user', content: 'Facts:\n' + facts }],
-          max_tokens: 350, temperature: 0.2,
+          max_tokens: 220, temperature: 0.2,
         });
         const text = String((out && (out.response || (out.result && out.result.response))) || '').trim();
         if (!text) return Response.json({ error: 'The AI returned nothing — try again' }, { status: 502 });
