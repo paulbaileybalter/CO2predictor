@@ -297,6 +297,7 @@
     return `<small>Where we probably are · ${h12}:${mm} ${ap}</small><b>${fT(L.level)} <span>${fP(L.level)}</span></b>
       <p>Likely ${fP(Math.max(0, L.lo), 0)}–${fP(L.hi, 0)}. Today's board (${esc(bits)}) forecasts ${fT(L.use)} for the day; about ${pct}% of the day's draw is done (${fT(L.used)}), counted from ${esc(L.label)}.</p>`;
   }
+  function todaySoFar() { const L = liveEstimate(); return L && !L.done ? `<b>${fT(L.used)}</b><small>so far (est.) · day in progress</small>` : '–'; }
   function updateLive() { const el = $('#liveTile'); if (el) el.innerHTML = liveTileHTML(); }
   setInterval(updateLive, 60000);
 
@@ -425,7 +426,7 @@
 
   /* ---------- level chart ---------- */
   let tips = {};
-  let chartBack = 28, planBack = 0;       // how far back (days) the chart and the plan table reach; 0 in planBack = hidden, 9999 = everything
+  let chartBack = 28, planBack = 7;       // how far back (days) the chart and the plan table reach; 0 in planBack = hidden, 9999 = everything
   const bt = { key: '', cache: {} };
   // what the model would have predicted for a past day using only the readings available before it
   function predictedAtTime(o) {
@@ -519,7 +520,7 @@
       if (r.add) notes.push(`<span class="chip st-ok"><i></i>Delivery +${ldT(r.add)}</span>`);
       if (r.pre < set.floor) notes.push('<span class="chip st-order"><i></i>Below floor</span>');
       if (r.pre < 0) notes.push('<span class="chip st-risk"><i></i>Empty</span>');
-      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num muted">–</td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 10 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
+      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num muted">${i === 0 && d === TODAY ? todaySoFar() : '–'}</td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 10 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
     }).join('');
     // past days: what was predicted at the time vs what actually happened
     const actualOn = {}; C.hist.forEach((o) => o.days.forEach((d) => { actualOn[d] = { a: o.use / o.n, n: o.n, o }; }));
@@ -551,7 +552,7 @@
       </div>
       <div class="panel" style="margin-top:14px">
         <div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between"><div><b>Plan &amp; predicted use</b> <span class="muted" style="font-size:12px">· transfers counted per tank, cartons and kegs from the board</span></div>
-          <div class="row"><span class="muted" style="font-size:12px">Show past days:</span><div class="segs">${[[0, 'Hide'], [14, '2 wks'], [28, '4 wks'], [9999, 'All']].map(([v, l]) => `<button type="button" class="seg${planBack === v ? ' on' : ''}" data-act="planBack" data-v="${v}">${l}</button>`).join('')}</div>
+          <div class="row"><span class="muted" style="font-size:12px">Show past days:</span><div class="segs">${[[0, 'Hide'], [7, '1 wk'], [14, '2 wks'], [28, '4 wks'], [9999, 'All']].map(([v, l]) => `<button type="button" class="seg${planBack === v ? ' on' : ''}" data-act="planBack" data-v="${v}">${l}</button>`).join('')}</div>
           ${nOv ? `<button class="btn small" data-act="resetOv">Reset ${plural(nOv, 'changed day')}</button>` : ''}</div></div>
         <div class="tbl-wrap" id="planWrap" style="${planBack ? 'max-height:560px;overflow:auto' : ''}"><table class="sticky-head"><thead><tr><th>Date</th><th class="r">70HL</th><th class="r">300HL</th><th class="r">500HL</th><th class="r">Cartons</th><th class="r">Kegs</th><th class="r">Predicted use</th><th class="r">Actual use</th><th class="r">Level start → end</th><th></th></tr></thead><tbody>${pastHtml}${todayRow}${rowsHtml}</tbody></table></div>
         <div class="note" style="padding-top:10px">Orange boxes are your what-if changes. Weekends are shaded. Level is shown as % of the ${set.cap} t vessel.</div>
