@@ -84,6 +84,8 @@
       if (drop < -3) { deliveries.push({ d: b.viaAm ? addDays(b.d, 1) : b.d, from: a.d, rise: -drop, days: span }); continue; }
       if (span > 4) { notes.push({ d: b.d, text: `${span}-day gap in readings before this date — not used for fitting.` }); continue; }
       if (drop < 0.5) { notes.push({ d: b.d, text: `Level barely moved (${drop.toFixed(1)}) since ${a.d} — not used for fitting.` }); continue; }
+      const noBoard = days.filter((d) => !board[d]);
+      if (noBoard.length) { notes.push({ d: b.d, text: `No Live Brewery Board entry for ${noBoard[0]}${noBoard.length > 1 ? ' (+' + (noBoard.length - 1) + ' more)' : ''} — not used for fitting, so a missing board is not mistaken for a quiet day.` }); continue; }
       const x = new Array(NF).fill(0);
       days.forEach((d) => featRow(board[d]).forEach((v, k) => (x[k] += v)));
       obs.push({ d: b.d, days, n: span, use: drop, x });
