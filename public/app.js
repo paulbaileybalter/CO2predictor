@@ -154,7 +154,7 @@
     const expT = set.expT > 0 ? +set.expT : size.med;
     const days = M.range(startDate, end).map((d, i) => ({ d, rec: recFor(d), frac: i === 0 ? frac0 : 1 }));
     const cfg = { floor: set.floor, scale: set.scale, halt: set.halt, loadPct: expT * 1000 / kgPt, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
-    const orderArr = (o) => o.date;                        // trucks arrive 10 pm on the delivery date
+    const orderArr = (o) => o.date;                        // trucks arrive 9 pm on the delivery date
     const orders = state.orders.map((o) => ({ i: days.findIndex((x) => x.d === orderArr(o)), pts: Math.max(0, o.t) / (set.load || 20) * expT * 1000 / kgPt, ref: o })).filter((o) => o.i >= 0);
     const sim = M.simulate({ startLevel, days, model, cfg, orders });
 
@@ -218,21 +218,21 @@
       <textarea id="summaryBox" rows="4" placeholder="Press “Write summary with AI” for a short plain-English update, then edit it however you like. It goes into the email version.">${esc(state.summary || '')}</textarea>
       <p class="muted" style="font-size:12px;margin:6px 0 14px">Written by Cloudflare Workers AI from the figures on this page. Check it before sending: you can edit the text, and your edits are kept until you regenerate.</p>
       <div class="notes-head"><div><span class="eyebrow">Notes</span><b>Notes for this plan</b></div><span class="muted" style="font-size:12px">Saved for everyone using the site · included in the email version</span></div>
-      <textarea id="notesBox" rows="3" placeholder="e.g. Truck confirmed with Supagas for 10 pm. Brite CIPs planned Wed — expect extra use.">${esc(state.notes || '')}</textarea>
+      <textarea id="notesBox" rows="3" placeholder="e.g. Truck confirmed with Supagas for 9 pm. Brite CIPs planned Wed — expect extra use.">${esc(state.notes || '')}</textarea>
     </div>`;
   }
 
   // plain-text facts handed to the AI: every number comes from the model, the AI only words it
   function factsText() {
     const ns = nextStatus(), p = ns.p, sim = C.sim, set = S(), L = [];
-    L.push(`Site: Balter Brewing CO2 bulk vessel, ${set.cap} t capacity, deliveries of ${set.load} t arrive at 10 pm on the delivery date.`);
+    L.push(`Site: Balter Brewing CO2 bulk vessel, ${set.cap} t capacity, deliveries of ${set.load} t arrive at 9 pm on the delivery date.`);
     const lastDel = C.past.length ? C.past[C.past.length - 1] : null;
     if (lastDel) { const rr = C.rows.find((r) => r.d === lastDel.d), lv = rr ? (rr.pm !== null ? rr.pm : rr.am) : null;
       L.push(`Most recent delivery: ${fmtD(lastDel.d)}, estimated ${fT(lastDel.pts)} delivered${lv !== null && lv !== undefined ? ', leaving the vessel at ' + fP(lv) + ' on the gauge' : ''}${lastDel.short ? '; that is less than a full ' + set.load + ' t load' : ''}.`); }
     L.push(`Latest vessel reading: ${fP(C.startLevel)} (${fT(C.startLevel)}), ${C.lastLabel}.`);
     L.push(`Levels that matter: comfort floor ${set.floor}%, production scale-back ${set.scale}%, production stops ${set.halt}%.`);
     if (p) {
-      L.push(`Next delivery: ${fmtD(p.d)} at 10 pm, ${ldT(p.add)}${p.ordered ? ', ORDER ALREADY PLACED' + (p.order.placed ? ' on ' + fmtD(p.order.placed) : '') : ', NOT YET ORDERED, order by ' + fmtD(p.orderBy)}.`);
+      L.push(`Next delivery: ${fmtD(p.d)} at 9 pm, ${ldT(p.add)}${p.ordered ? ', ORDER ALREADY PLACED' + (p.order.placed ? ' on ' + fmtD(p.order.placed) : '') : ', NOT YET ORDERED, order by ' + fmtD(p.orderBy)}.`);
       L.push(`Expected level when it arrives: ${fP(p.before)} (${fT(p.before)}); after it: ${fP(p.after)}. In a heavy-use case the level on arrival could be as low as ${fP(Math.max(0, p.lowBefore), 0)}.`);
     } else L.push(`No delivery needed before ${fmtD(C.end)}.`);
     L.push(`Delivery size: ${set.load} t is ordered but trucks have recently delivered ${C.size.lo.toFixed(1)} to ${C.size.hi.toFixed(1)} t, typically ${C.size.med.toFixed(1)} t; the plan assumes ${C.expT.toFixed(1)} t per delivery.`);
@@ -343,11 +343,11 @@
     let when, relTxt, list;
     if (p) {
       when = fmtD(p.d); relTxt = rel(p.d);
-      const ordLine = p.ordered ? `<li><b>Order</b><span>Placed ${p.order.placed ? fmtD(p.order.placed) : ''} for ${fmtD(p.order.date)} at 10 pm <span class="muted">(${(+p.order.t).toFixed(0)} t)</span></span></li>` : `<li><b>Order by</b><span>${fmtD(p.orderBy)} <span class="muted">(${plural(set.lead, 'day')} notice)</span></span></li>`;
+      const ordLine = p.ordered ? `<li><b>Order</b><span>Placed ${p.order.placed ? fmtD(p.order.placed) : ''} for ${fmtD(p.order.date)} at 9 pm <span class="muted">(${(+p.order.t).toFixed(0)} t)</span></span></li>` : `<li><b>Order by</b><span>${fmtD(p.orderBy)} <span class="muted">(${plural(set.lead, 'day')} notice)</span></span></li>`;
       list = `
         ${ordLine}
         <li><b>Expected load</b><span>${ldT(p.add)} <span class="muted">${p.partial ? '— only part of the load fits' : p.ordered ? '— ' + (+p.order.t).toFixed(0) + ' t ordered' : '— a ' + set.load + ' t order'}; recent loads ${C.size.lo.toFixed(1)}–${C.size.hi.toFixed(1)} t</span></span></li>
-        <li><b>Level on arrival (10 pm)</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
+        <li><b>Level on arrival (9 pm)</b><span>${fP(p.before)} <span class="muted">(${fT(p.before)}) → ${fP(p.after)}</span></span></li>
         <li><b>Hits ${set.floor}% floor</b><span>${sim.floorDate ? fmtD(sim.floorDate) : 'not in window'}${sim.floorDateLo && sim.floorDateLo < sim.floorDate ? ` <span class="muted">(as early as ${fmtD(sim.floorDateLo)})</span>` : ''}</span></li>
         <li><b>Scale back (${set.scale}%) if none</b><span>${sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window'}</span></li>
         <li><b>Production stops (${set.halt}%) if none</b><span>${sim.haltDate ? fmtD(sim.haltDate) : 'not in window'}</span></li>`;
@@ -394,7 +394,7 @@
     const rows = pl.map((x, i) => {
       const left = M.diffDays(TODAY, x.orderBy);
       const chip = x.ordered ? `<span class="chip st-ok"><i></i>Ordered</span>${x.before < S().floor ? ' <span class="chip st-watch"><i></i>Low on arrival</span>' : ''}` : x.tooLate ? '<span class="chip st-risk"><i></i>Needed before your order lands</span>' : left < 0 ? '<span class="chip st-risk"><i></i>Overdue</span>' : left === 0 ? '<span class="chip st-order"><i></i>Order today</span>' : left <= 2 ? '<span class="chip st-watch"><i></i>Soon</span>' : '<span class="chip st-ok"><i></i>On track</span>';
-      return `<tr><td>${i + 1}</td><td class="sticky-col2"><b>${fmtD(x.d)}</b><small>${rel(x.d)}${x.ordered ? ' · 10 pm' : ''}</small></td><td>${x.ordered ? 'Placed' + (x.order.placed ? ' ' + fmtS(x.order.placed) : '') : fmtD(x.orderBy)}</td><td class="r num">${fP(x.before)}<small>${fT(x.before)}</small></td><td class="r num">${fP(x.after)}<small>${fT(x.after)}</small></td><td class="r num">${ldT(x.add)}${x.partial ? '<small>part load</small>' : ''}</td><td>${chip}</td></tr>`;
+      return `<tr><td>${i + 1}</td><td class="sticky-col2"><b>${fmtD(x.d)}</b><small>${rel(x.d)}${x.ordered ? ' · 9 pm' : ''}</small></td><td>${x.ordered ? 'Placed' + (x.order.placed ? ' ' + fmtS(x.order.placed) : '') : fmtD(x.orderBy)}</td><td class="r num">${fP(x.before)}<small>${fT(x.before)}</small></td><td class="r num">${fP(x.after)}<small>${fT(x.after)}</small></td><td class="r num">${ldT(x.add)}${x.partial ? '<small>part load</small>' : ''}</td><td>${chip}</td></tr>`;
     }).join('');
     return `<div class="panel" style="margin-top:14px">
       <div class="pad" style="padding-bottom:6px"><b>Delivery schedule to ${fmtD(C.end)}</b> <span class="muted" style="font-size:12px">· assumes each load lands on the day shown and the plan on the board is followed</span></div>
@@ -410,7 +410,7 @@
     const arr = (o) => o.date;
     const list = state.orders.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((o) => {
       const gone = arr(o) < C.startDate;
-      return `<tr class="${gone ? 'hist' : ''}"><td class="sticky-col">${fmtD(o.date)}</td><td>10 pm that evening</td><td class="r num">${(+o.t).toFixed(1)} t</td><td>${o.placed ? fmtD(o.placed) : ''}</td><td>${esc(o.note || '')}</td><td>${gone ? '<span class="chip plain"><i></i>Should have arrived</span>' : '<span class="chip st-ok"><i></i>Counted in forecast</span>'}</td><td class="r"><button class="btn small x" data-act="delOrder" data-id="${esc(o.id)}" aria-label="Delete order">×</button></td></tr>`;
+      return `<tr class="${gone ? 'hist' : ''}"><td class="sticky-col">${fmtD(o.date)}</td><td>9 pm that evening</td><td class="r num">${(+o.t).toFixed(1)} t</td><td>${o.placed ? fmtD(o.placed) : ''}</td><td>${esc(o.note || '')}</td><td>${gone ? '<span class="chip plain"><i></i>Should have arrived</span>' : '<span class="chip st-ok"><i></i>Counted in forecast</span>'}</td><td class="r"><button class="btn small x" data-act="delOrder" data-id="${esc(o.id)}" aria-label="Delete order">×</button></td></tr>`;
     }).join('');
     return `<div class="panel" style="margin-top:14px" id="orders">
       <div class="pad" style="padding-bottom:6px"><b>Orders placed with Supagas</b> <span class="muted" style="font-size:12px">· a logged order is treated as arriving; the forecast then plans the load after it</span></div>
@@ -499,7 +499,7 @@
     tips = {};
     hist.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b><br>${r.cur && r.pm === null ? 'Now (' + r.cur.h + ') ' + fP(r.cur.v) + ' (' + fT(r.cur.v) + ')<br>' : ''}${r.am !== null ? 'Morning ' + fP(r.am) + ' (' + fT(r.am) + ')<br>' : ''}${r.pm !== null ? 'Evening ' + fP(r.pm) + ' (' + fT(r.pm) + ')' : ''}`; });
     C.past.forEach((dv) => { tips[dv.d] = (tips[dv.d] || '') + `<br><span style="color:#47D7AC">▲ Delivery received ≈ ${dv.t.toFixed(0)} t</span>`; });
-    sim.rows.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b> · forecast<br>Use ${fT(r.use)} (${fP(r.use)})<br>Start ${fP(r.s)} → end ${fP(r.pre)} (${fT(r.pre)})${r.add ? '<br><span style="color:#FDAA63">◆ 10 pm delivery +' + ldT(r.add) + ' → ' + fP(r.e) + '</span>' : ''}<br><span style="opacity:.7">90% range at end ${fP(r.lo, 0)}–${fP(r.hi, 0)}</span>`; });
+    sim.rows.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b> · forecast<br>Use ${fT(r.use)} (${fP(r.use)})<br>Start ${fP(r.s)} → end ${fP(r.pre)} (${fT(r.pre)})${r.add ? '<br><span style="color:#FDAA63">◆ 9 pm delivery +' + ldT(r.add) + ' → ' + fP(r.e) + '</span>' : ''}<br><span style="opacity:.7">90% range at end ${fP(r.lo, 0)}–${fP(r.hi, 0)}</span>`; });
     const plotX = [x(first, 0), x(last, 1)];
     g += `<rect id="lvlHit" x="${plotX[0]}" y="${T}" width="${plotX[1] - plotX[0]}" height="${H - T - B}" fill="transparent"/>`;
     const svg = `<svg class="chart" id="lvlChart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Vessel level history and forecast" data-first="${first}" data-last="${last}" data-l="${L}" data-r="${R}" data-w="${W}">${g}</svg>`;
@@ -520,7 +520,7 @@
       if (r.add) notes.push(`<span class="chip st-ok"><i></i>Delivery +${ldT(r.add)}</span>`);
       if (r.pre < set.floor) notes.push('<span class="chip st-order"><i></i>Below floor</span>');
       if (r.pre < 0) notes.push('<span class="chip st-risk"><i></i>Empty</span>');
-      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num muted">${i === 0 && d === TODAY ? todaySoFar() : '–'}</td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 10 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
+      return `<tr class="${r.add ? 'dlv' : wk ? 'wk' : ''}${r.pre < set.floor ? ' low' : ''}"><td class="sticky-col">${fmtD(d)}</td>${cells}<td class="r num"><b>${fT(r.use)}</b><small>${fP(r.use)}</small></td><td class="r num muted">${i === 0 && d === TODAY ? todaySoFar() : '–'}</td><td class="r num">${fP(r.s)} → <b>${fP(r.pre)}</b><small>${fT(r.pre)} left${r.add ? ' · ' + fP(r.e) + ' after 9 pm load' : ''}</small></td><td>${notes.join(' ')}</td></tr>`;
     }).join('');
     // past days: what was predicted at the time vs what actually happened
     const actualOn = {}; C.hist.forEach((o) => o.days.forEach((d) => { actualOn[d] = { a: o.use / o.n, n: o.n, o }; }));
@@ -861,7 +861,7 @@
     const ns = nextStatus(), p = ns.p, sim = C.sim;
     const lines = ['CO2 delivery request — Balter Brewing'];
     if (p) {
-      lines.push(`Deliver: ${fmtD(p.d)}, 10 pm — 1 × ${ldT(p.add)} load${p.partial ? ' (part load fits)' : ''}`);
+      lines.push(`Deliver: ${fmtD(p.d)}, 9 pm — 1 × ${ldT(p.add)} load${p.partial ? ' (part load fits)' : ''}`);
       lines.push(`Order by: ${fmtD(p.orderBy)}`);
       lines.push(`Expected level on arrival: ${fP(p.before)} (${fT(p.before)})`);
     } else lines.push(`No delivery needed before ${fmtD(C.end)}.`);
@@ -888,10 +888,10 @@
     let card;
     if (p) {
       const li = (k, v) => `<tr><td valign="top" style="padding:3px 14px 3px 0;${F}font-size:13px;font-weight:600;color:${INK};white-space:nowrap">${k}</td><td style="padding:3px 0;${F}font-size:13px;color:${INK}">${v}</td></tr>`;
-      const ordered = p.ordered ? li('Order', `Placed ${p.order.placed ? fmtD(p.order.placed) : ''} — truck at 10 pm (${(+p.order.t).toFixed(0)} t)`) : li('Order by', `${fmtD(p.orderBy)} (${plural(set.lead, 'day')} notice)`);
+      const ordered = p.ordered ? li('Order', `Placed ${p.order.placed ? fmtD(p.order.placed) : ''} — truck at 9 pm (${(+p.order.t).toFixed(0)} t)`) : li('Order by', `${fmtD(p.orderBy)} (${plural(set.lead, 'day')} notice)`);
       card = `${eyebrow(p.ordered ? 'Next delivery · ordered' : 'Next delivery')}
         <div style="${F}font-size:30px;font-weight:700;color:${INK};line-height:1.15">${fmtD(p.d)}</div>
-        <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · 10 pm truck'}</div>
+        <div style="${F}font-size:12.5px;color:${MUTE};padding:2px 0 10px">${rel(p.d)}${p.ordered ? '' : ' · 9 pm truck'}</div>
         <table cellpadding="0" cellspacing="0" border="0">${ordered}${li('Expected load', `${ldT(p.add)} ${p.partial ? '— only part of the load fits' : p.ordered ? '— ' + (+p.order.t).toFixed(0) + ' t ordered' : '— ' + set.load + ' t order'} (recent loads ${C.size.lo.toFixed(1)}–${C.size.hi.toFixed(1)} t)`)}${li('Level on arrival', `${fP(p.before)} (${fT(p.before)}) → ${fP(p.after)}`)}${li('Hits ' + set.floor + '% floor', sim.floorDate ? fmtD(sim.floorDate) : 'not in window')}${li('Scale back (' + set.scale + '%) if none', sim.scaleDate ? fmtD(sim.scaleDate) : 'not in window')}${li('Production stops (' + set.halt + '%) if none', sim.haltDate ? fmtD(sim.haltDate) : 'not in window')}</table>
         <div style="${F}font-size:13px;font-weight:600;color:${INK};padding-top:10px">${esc(ns.text)}</div>`;
     } else card = `${eyebrow('Next delivery')}<div style="${F}font-size:26px;font-weight:700;color:${INK}">None needed</div><div style="${F}font-size:13px;color:${MUTE};padding-top:4px">The vessel stays above the ${set.floor}% floor to ${fmtD(C.end)}.</div>`;
@@ -930,7 +930,7 @@
       ${state.summary && state.summary.trim() ? box(eyebrow('Summary') + `<div style="${F}font-size:13px;line-height:1.55;color:${INK}">${esc(state.summary.trim()).replace(/\n/g, '<br>')}</div>`) : ''}
       ${state.notes && state.notes.trim() ? box(eyebrow('Notes') + `<div style="${F}font-size:13px;line-height:1.55;color:${INK}">${esc(state.notes.trim()).replace(/\n/g, '<br>')}</div>`) : ''}
       ${days.length ? box(eyebrow('Forecast') + `<div style="${F}font-size:15px;font-weight:700;padding-bottom:10px">Vessel level, day by day</div>` + chart) : ''}
-      ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">Delivery schedule to ${fmtD(C.end)}</div>` + sched + `<div style="${F}font-size:11px;color:${MUTE};padding-top:8px">Assumes each truck arrives at 10 pm on the day shown, after that day's use, and the Live Brewery Board plan is followed.</div>`)}
+      ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">Delivery schedule to ${fmtD(C.end)}</div>` + sched + `<div style="${F}font-size:11px;color:${MUTE};padding-top:8px">Assumes each truck arrives at 9 pm on the day shown, after that day's use, and the Live Brewery Board plan is followed.</div>`)}
       ${box(`<div style="${F}font-size:15px;font-weight:700;padding-bottom:6px">What's planned — next ${use.length} days</div>` + useTbl)}
       <div style="${F}font-size:11px;color:${MUTE};padding-top:12px;line-height:1.5">Forecast built from transfers (70/300/500 HL), packaging cartons and kegs on the Live Brewery Board, fitted to daily gauge readings. Brite CIPs are not tracked separately, so allow about ± ${fT(err)} per day.</div>
     </div>`;

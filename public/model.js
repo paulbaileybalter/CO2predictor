@@ -159,7 +159,7 @@
     const run = (withDeliveries) => {
       let lvl = startLevel; const rows = [];
       days.forEach((x, i) => {
-        // trucks arrive at 10 pm on the delivery date: the day's use comes first, then the load goes in
+        // trucks arrive at 9 pm on the delivery date: the day's use comes first, then the load goes in
         const pre = lvl - use[i].total; let add = 0;
         if (withDeliveries && del.has(i)) add = Math.min(typeof del.get(i) === 'number' ? del.get(i) : cfg.loadPct, Math.max(0, cfg.maxFill - pre));
         const e = pre + add, k = i + 1, band = cfg.z * sigma * Math.sqrt(k);
@@ -181,7 +181,7 @@
       const from = orderMap.size ? Math.min(...orderMap.keys()) : -1;     // days up to the first placed order are covered by that order
       const i = rows.findIndex((r, k) => k > from && r.pre < cfg.floor);
       if (i < 0) break;
-      let j = i - 1; while (j >= 0 && !allowed(days[j].d)) j--;           // a 10 pm truck must land on the day before the breach (or earlier)
+      let j = i - 1; while (j >= 0 && !allowed(days[j].d)) j--;           // a 9 pm truck must land on the day before the breach (or earlier)
       if (j < 0 || del.has(j)) { rows[i].short = true; break; }     // cannot be fixed within the horizon
       del.set(j, true);
     }
