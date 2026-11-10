@@ -159,11 +159,15 @@
     const run = (withDeliveries) => {
       let lvl = startLevel; const rows = [];
       days.forEach((x, i) => {
-        // trucks arrive at 9 pm on the delivery date: the day's use comes first, then the load goes in
-        const pre = lvl - use[i].total; let add = 0;
-        if (withDeliveries && del.has(i)) add = Math.min(typeof del.get(i) === 'number' ? del.get(i) : cfg.loadPct, Math.max(0, cfg.maxFill - pre));
-        const e = pre + add, k = i + 1, band = cfg.z * sigma * Math.sqrt(k);
-        rows.push({ d: x.d, s: lvl, pre, e, add, use: use[i].total, parts: use[i].parts,
+        // trucks normally arrive in the evening: the day's use comes first, then the load goes in.
+        // A load flagged `am` (arriving before the day's use starts) goes in first instead.
+        const ord = orderMap.get(i), am = !!(withDeliveries && del.has(i) && ord && ord.am);
+        const want = typeof del.get(i) === 'number' ? del.get(i) : cfg.loadPct;
+        let pre, add = 0;
+        if (am) { add = Math.min(want, Math.max(0, cfg.maxFill - lvl)); pre = lvl + add - use[i].total; }
+        else { pre = lvl - use[i].total; if (withDeliveries && del.has(i)) add = Math.min(want, Math.max(0, cfg.maxFill - pre)); }
+        const e = am ? pre : pre + add, k = i + 1, band = cfg.z * sigma * Math.sqrt(k);
+        rows.push({ d: x.d, s: lvl, pre, e, add, am, use: use[i].total, parts: use[i].parts,
                     lo: pre - band, hi: Math.min(100, pre + band), loE: e - band, hiE: Math.min(100, e + band) });
         lvl = e;
       });
@@ -189,7 +193,7 @@
     rows.forEach((r, i) => {
       if (r.add > 0) {
         const ord = orderMap.get(i);
-        planned.push({ i, d: r.d, before: r.pre, after: r.e, add: r.add, lowBefore: r.lo,
+        planned.push({ i, d: r.d, am: r.am, before: r.am ? r.s : r.pre, after: r.am ? r.s + r.add : r.e, add: r.add, lowBefore: r.am ? r.lo - r.add + r.use : r.lo,
                        orderBy: addDays(r.d, -cfg.lead), partial: r.add < (ord ? ord.pts : cfg.loadPct) - 0.5, ordered: !!ord, order: ord ? ord.ref : null });
       }
     });

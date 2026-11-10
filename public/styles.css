@@ -250,3 +250,8 @@ table.sticky-head thead th{position:sticky;top:0;background:#fff;z-index:2;box-s
 .ovbar{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
 .ovbar input[type=date]{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line,#d9d9e3);border-radius:6px}
 .banner{flex-wrap:wrap}
+.dlink{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left;border-bottom:1px dashed currentColor}
+.dlink .pen{opacity:.5;font-size:12px}.dlink:hover .pen{opacity:1}
+.oed{display:flex;flex-direction:column;gap:6px;min-width:190px}.oed-row{display:flex;gap:6px;flex-wrap:wrap}
+.oed input{font:inherit;font-size:13px;padding:4px 6px;border:1px solid #d9d9e3;border-radius:6px}
+tr.late td{background:rgba(220,60,60,.06)}
