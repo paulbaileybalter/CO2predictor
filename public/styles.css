@@ -245,3 +245,8 @@ table.sticky-head thead th{position:sticky;top:0;background:#fff;z-index:2;box-s
 #liveTile b{font-size:26px;font-weight:700;letter-spacing:-.01em}
 #liveTile b span{font-size:14px;color:var(--muted);font-weight:600}
 #liveTile p{font-size:12px;color:var(--muted);margin:2px 0 0;line-height:1.45}
+
+/* late / rescheduled deliveries */
+.ovbar{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
+.ovbar input[type=date]{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line,#d9d9e3);border-radius:6px}
+.banner{flex-wrap:wrap}
