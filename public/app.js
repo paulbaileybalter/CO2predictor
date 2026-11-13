@@ -192,7 +192,7 @@
     tbc = !!tbc; if (nd === curD && tm === curT && tbc === !!o.tbc) return;
     if (!o.was) { o.was = o.date; o.wasTime = curT; }
     const back = nd === o.was && tm === (o.wasTime || '21:00');
-    o.eta = nd === o.was ? null : nd; o.time = tm === '21:00' ? null : tm; o.arrived = false; o.tbc = tbc; o.delayed = !!(o.delayed && tbc); editOrder = null;
+    o.eta = nd === o.was ? null : nd; o.time = tm === '21:00' ? null : tm; o.arrived = false; o.tbc = tbc; o.delayed = false; o.preEta = null; editOrder = null;   // a date typed in by hand always wins over the automatic roll-forward
     const txt = back ? `Delivery due ${fmtD(o.was)} is back on schedule` : `Delivery due ${fmtD(o.was)} did not arrive — now expected ${fmtD(nd)} at ${tLab(o)}`;
     const ev = o.evId && state.events.find((x) => x.id === o.evId);
     if (o.rem) { /* a top-up load: no 'did not arrive' note */ } else if (ev) { ev.text = txt; } else { o.evId = 'ev' + Date.now(); state.events.push({ id: o.evId, d: o.was, text: txt }); }
