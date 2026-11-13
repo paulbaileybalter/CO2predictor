@@ -258,3 +258,4 @@ tr.late td{background:rgba(220,60,60,.06)}
 .gt{width:92px;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #d9d9e3;border-radius:6px}
 .oed-tbc{font-size:12px;display:flex;gap:6px;align-items:flex-start}
 tr.done td{background:rgba(71,215,172,.10)}
+.btn.on{background:#fdf0e3;border-color:#fdaa63}
