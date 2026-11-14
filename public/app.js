@@ -42,6 +42,7 @@
     if (typeof s.notes !== 'string') s.notes = '';
     if (typeof s.summary !== 'string') s.summary = '';
     if (!Array.isArray(s.events)) s.events = [];
+    if (!s.deliveryT || typeof s.deliveryT !== 'object') s.deliveryT = {};      // delivery sizes (t) you have recorded, by date
     ((window.SEED && window.SEED.events) || []).forEach((ev) => { if (!s.events.some((x) => x.id === ev.id) && !(s.removedEvents || []).includes(ev.id)) s.events.push({ ...ev }); });
     if (s.invNeedsSeed || !s.seededOrders) { seedOrders.forEach((o) => { if (!s.orders.some((x) => x.id === o.id)) s.orders.push({ ...o }); }); s.seededOrders = true; }
     s.settings = { ...DEFAULTS, ...(s.settings || {}) };
@@ -104,7 +105,9 @@
     const kgPt = ratios.length >= 3 ? ratios[Math.floor(ratios.length / 2)] : set.cap * 10;
     const samples = inv.slice(-12).map((i) => ({ d: i.date, kg: i.kg, src: 'invoice' }));
     const maxKg = inv.length ? Math.max(...inv.map((i) => i.kg)) : set.load * 1000;      // a gauge estimate cannot beat the biggest load ever invoiced
-    past.filter((x) => x.d > lastInv && x.pts > 20).forEach((x) => samples.push({ d: x.d, kg: Math.min(maxKg, x.pts * kgPt), src: 'gauge' }));
+    past.filter((x) => x.rec !== null && !inv.some((i) => Math.abs(M.diffDays(i.date, x.d)) <= 2)).forEach((x) => samples.push({ d: x.d, kg: x.rec * 1000, src: 'recorded' }));
+    past.filter((x) => x.rec === null && x.d > lastInv && x.pts > 20).forEach((x) => samples.push({ d: x.d, kg: Math.min(maxKg, x.pts * kgPt), src: 'gauge' }));
+    samples.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
     const kgs = samples.slice(-12).map((x) => x.kg).sort((a, b) => a - b);
     if (!kgs.length) return { med: set.load, lo: set.load, hi: set.load, n: 0, kgPt, samples: [] };
     const at = (p) => kgs[Math.min(kgs.length - 1, Math.max(0, Math.round(p * (kgs.length - 1))))] / 1000;
@@ -145,7 +148,8 @@
       // morning reading already above last night's level = it was taken after the truck: size is read straight off the gauge
       const pts = amOn[x.d] !== undefined && amOn[x.d] > before + 3 ? amOn[x.d] - before : x.rise + x.days * meanUse;
       const full = cfgLoadPct(), short = pts < full * 0.85 && before + pts < set.maxFill - 5;   // a load that stopped at max fill is not "short"
-      return { ...x, pts, t: tn(pts), before, short };
+      const rec = +state.deliveryT[x.d] > 0 ? +state.deliveryT[x.d] : null;
+      return { ...x, pts, t: rec !== null ? rec : tn(pts), rec, before, short: rec !== null ? rec < set.load - 1.5 : short };
     });
 
     // how big do deliveries really turn out? learned from the invoices (kg) plus gauge-estimated loads since the last invoice
@@ -439,7 +443,7 @@
     const late = overdueOrders();
     const cell = (o, d, subtxt) => editOrder === o.id ? orderEditor(o) : `<button type="button" class="dlink" data-act="editOrder" data-id="${esc(o.id)}" title="Click to change the date or time"><b>${fmtD(d)}</b> <span class="pen">✎</span></button><small>${subtxt}</small>`;
     const lateRows = late.map((o) => `<tr class="late"><td>!</td><td class="sticky-col2">${cell(o, effDate(o), `${tLab(o)} · hasn't shown on the gauge${(o.eta || o.delayed) ? ' · delayed from ' + fmtD(o.was || o.date) : ''}`)}</td><td>Placed${o.placed ? ' ' + fmtS(o.placed) : ''}</td><td class="r num">–</td><td class="r num">–</td><td class="r num">${(+o.t).toFixed(1)} t</td><td><span class="chip st-bad"><i></i>Not arrived yet?</span> <button class="btn small" data-act="toggleDelayed" data-id="${esc(o.id)}">Mark delayed</button> <input type="number" step="0.1" min="0" class="gt" id="gt-${esc(o.id)}" placeholder="t received" aria-label="Tonnes received (leave blank for a full load)"><button class="btn small" data-act="arrivedOrder" data-id="${esc(o.id)}">It arrived</button></td></tr>`).join('');
-    const doneRows = state.orders.filter((o) => o.arrived && o.arrivedOn && M.diffDays(TODAY, o.arrivedOn) <= 3).map((o) => `<tr class="done"><td>✓</td><td class="sticky-col2"><b>${fmtD(o.arrivedOn)}</b><small>Delivered${o.arrivedAt ? ' · ' + tLab({ time: o.arrivedAt }) : ''}${o.ordT ? ' · ' + (+o.t).toFixed(1) + ' of ' + (+o.ordT).toFixed(0) + ' t ordered' : ''}${effDate(o) !== o.arrivedOn ? ' · was due ' + fmtD(effDate(o)) : ''}</small></td><td>Placed${o.placed ? ' ' + fmtS(o.placed) : ''}</td><td class="r num">–</td><td class="r num">–</td><td class="r num">${(+o.t).toFixed(1)} t</td><td><span class="chip st-ok"><i></i>Delivered</span> <button class="btn small" data-act="undoArrived" data-id="${esc(o.id)}">Undo</button></td></tr>`).join('');
+    const doneRows = state.orders.filter((o) => o.arrived && o.arrivedOn && M.diffDays(TODAY, o.arrivedOn) <= 3).map((o) => `<tr class="done"><td>✓</td><td class="sticky-col2"><b>${fmtD(o.arrivedOn)}</b><small>Delivered${o.arrivedAt ? ' · ' + tLab({ time: o.arrivedAt }) : ''}${o.ordT ? ' · ' + (+o.t).toFixed(1) + ' of ' + (+o.ordT).toFixed(0) + ' t ordered' : ''}${effDate(o) !== o.arrivedOn ? ' · was due ' + fmtD(effDate(o)) : ''}</small></td><td>Placed${o.placed ? ' ' + fmtS(o.placed) : ''}</td><td class="r num">–</td><td class="r num">–</td><td class="r num"><input type="number" class="dvO gt" step="0.1" min="0" data-id="${esc(o.id)}" value="${(+o.t).toFixed(1)}" aria-label="Tonnes delivered"> t</td><td><span class="chip st-ok"><i></i>Delivered</span> <button class="btn small" data-act="undoArrived" data-id="${esc(o.id)}">Undo</button></td></tr>`).join('');
     const tick = (o) => `<span class="ovbar"><input type="number" step="0.1" min="0" class="gt" id="gt-${esc(o.id)}" placeholder="t received" aria-label="Tonnes received (blank = full load)"><button class="btn small" data-act="arrivedOrder" data-id="${esc(o.id)}" title="Tick when the truck has been and gone, even if it came early">✓ Delivered</button><button class="btn small${o.delayed ? ' on' : ''}" data-act="toggleDelayed" data-id="${esc(o.id)}" title="Toggle: the truck didn't come when expected">${o.delayed ? '↺ Delayed — undo' : 'Mark delayed'}</button></span>`;
     const rows = doneRows + lateRows + pl.map((x, i) => {
       const left = M.diffDays(TODAY, x.orderBy);
@@ -587,7 +591,7 @@
       const diff = a && pr !== null ? a.a - pr : null;
       const lv = rd ? `${rd.am !== null ? fP(rd.am) : '–'} → <b>${rd.pm !== null ? fP(rd.pm) : '–'}</b>` : '–';
       const notes = [];
-      if (dv) notes.push(`<span class="chip st-ok"><i></i>Delivery ≈ ${(dv.pts * C.kgPt / 1000).toFixed(1)} t</span>`);
+      if (dv) notes.push(`<span class="chip st-ok"><i></i>Delivery ${dv.rec !== null ? '' : '≈ '}<input type="number" class="dvT" step="0.1" min="0" data-d="${dv.d}" value="${dv.t.toFixed(1)}" aria-label="Tonnes delivered ${dv.d}"> t${dv.rec !== null ? ' (you)' : ''}</span>`);
       if (a && a.n > 1) notes.push(`<span class="chip plain"><i></i>avg of ${a.n} days</span>`);
       ev.forEach((e) => notes.push(`<span class="chip st-watch" title="${esc(e.text)}"><i></i>${esc(e.text.length > 28 ? e.text.slice(0, 26) + '…' : e.text)}</span>`));
       const bigMiss = diff !== null && Math.abs(diff) > 1.5;
@@ -791,7 +795,7 @@
       ${calibTxt ? `<div class="note" style="padding-top:0">${calibTxt}</div>` : ''}
       <div class="panel pad" style="margin-top:14px"><b>What size do deliveries actually come in?</b>
         <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Plans assume about <b>${C.expT.toFixed(1)} t</b> per delivery${S().expT > 0 ? ' (your override)' : ''}, not the ${S().load} t ordered. From the last ${C.size.n} full loads: typical <b>${C.size.med.toFixed(1)} t</b>, usually between <b>${C.size.lo.toFixed(1)}</b> and <b>${C.size.hi.toFixed(1)} t</b>. Part loads under 14 t are left out.</p>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${C.size.samples.map((x) => `<span class="chip ${x.src === 'gauge' ? 'info' : 'plain'}" title="${x.src === 'gauge' ? 'Estimated from the gauge — no invoice yet' : 'Invoiced'}"><i></i>${fmtS(x.d)} · ${(x.kg / 1000).toFixed(1)} t${x.src === 'gauge' ? ' (gauge)' : ''}</span>`).join('')}</div></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${C.size.samples.map((x) => `<span class="chip ${x.src === 'invoice' ? 'plain' : 'info'}" title="${x.src === 'gauge' ? 'Estimated from the gauge — no invoice yet' : x.src === 'recorded' ? 'Recorded by you' : 'Invoiced'}"><i></i>${fmtS(x.d)} · ${(x.kg / 1000).toFixed(1)} t${x.src === 'gauge' ? ' (gauge)' : x.src === 'recorded' ? ' (recorded)' : ''}</span>`).join('')}</div></div>
       </div>
       <div class="drv" style="margin-top:14px;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)">
         <div class="panel"><div class="tbl-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>Invoice date</th><th>Docket</th><th class="r">Invoiced</th><th class="r">$ ex GST</th><th class="r">$/kg</th><th class="r">Gauge est.</th><th class="r">Diff</th><th>Check</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>
@@ -820,12 +824,12 @@
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.am === null ? '' : r.am}" data-d="${r.d}" data-f="am" aria-label="Morning level ${r.d}"></td>
         <td class="r"><input type="number" class="rd" step="0.1" min="0" max="100" value="${r.pm === null ? '' : r.pm}" data-d="${r.d}" data-f="pm" aria-label="Evening level ${r.d}"></td>
         ${useCells}
-        <td>${evs.map((x) => `<span class="chip st-watch" title="${esc(x.text)}"><i></i>${esc(x.text.length > 34 ? x.text.slice(0, 32) + '…' : x.text)}</span> `).join('')}${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.short ? 'st-order' : 'st-ok'}"><i></i>Delivery ≈ ${dv.t.toFixed(0)} t${dv.short ? ' — short load?' : ''}</span>` : ''}</td>
+        <td>${evs.map((x) => `<span class="chip st-watch" title="${esc(x.text)}"><i></i>${esc(x.text.length > 34 ? x.text.slice(0, 32) + '…' : x.text)}</span> `).join('')}${r.cur ? `<span class="chip info"><i></i>Now ${r.cur.v}% at ${r.cur.h}</span> ` : ''}${dv ? `<span class="chip ${dv.short ? 'st-order' : 'st-ok'}"><i></i>Delivery ${dv.rec !== null ? '' : '≈ '}<input type="number" class="dvT" step="0.1" min="0" data-d="${dv.d}" value="${dv.t.toFixed(1)}" aria-label="Tonnes delivered ${dv.d}"> t${dv.rec !== null ? ' (you)' : dv.short ? ' — short load?' : ''}</span>` : ''}</td>
         <td class="r"><button class="btn small x" data-act="delReading" data-d="${r.d}" aria-label="Delete reading ${r.d}">×</button></td></tr>`;
     }).join('');
     const outNotes = C.model.outliers.map((o) => `<li><b>${o.days.length > 1 ? fmtS(o.days[0]) + '–' + fmtS(o.d) : fmtS(o.d)}:</b> measured ${o.use.toFixed(1)} pts/day but the board predicts ${o.pred.toFixed(1)} — worth checking that day's readings or whether the plan changed.</li>`).join('');
     const notes = outNotes + C.q.notes.map((n) => `<li><b>${fmtS(n.d)}:</b> ${esc(n.text)}</li>`).join('');
-    const pastNotes = C.past.filter((x) => x.short).map((x) => `<li><b>${fmtS(x.d)}:</b> the level rose about ${fT(x.pts)} (${fP(x.before, 0)} → ${fP(x.before + x.pts, 0)}), well short of a ${set.load} t load that fits — was this a short delivery?</li>`).join('');
+    const pastNotes = C.past.filter((x) => x.short && x.rec === null).map((x) => `<li><b>${fmtS(x.d)}:</b> the level rose about ${fT(x.pts)} (${fP(x.before, 0)} → ${fP(x.before + x.pts, 0)}), well short of a ${set.load} t load that fits — was this a short delivery?</li>`).join('');
     const boardMsg = C.lastBoard ? `Board loaded to <b>${fmtD(C.lastBoard)}</b>; transfers planned to <b>${C.boardEnd ? fmtD(C.boardEnd) : 'none'}</b>.` : 'No board loaded.';
     return `<section class="sec" id="readings">
       <div class="panel pad" id="events">
@@ -1042,6 +1046,12 @@
       ov[k] = v === null || v === base ? null : Math.max(0, v);
       if (ov.every((x) => x === null)) delete state.overrides[d]; else state.overrides[d] = ov;
       save(); render();
+    } else if (t.classList.contains('dvT')) {
+      const v = num(t.value), d = t.dataset.d; if (v !== null && v > 0) state.deliveryT[d] = v; else delete state.deliveryT[d];
+      save(); render(); toast(v ? `Delivery on ${fmtD(d)} recorded as ${v} t` : 'Back to the gauge estimate');
+    } else if (t.classList.contains('dvO')) {
+      const o = state.orders.find((x) => x.id === t.dataset.id), v = num(t.value); if (!o || !(v > 0)) return;
+      if (!o.ordT) o.ordT = o.t; o.t = v; if (o.arrivedOn) state.deliveryT[o.arrivedOn] = v; save(); render(); toast(`Delivery recorded as ${v} t`);
     } else if (t.classList.contains('rd')) {
       setReading(t.dataset.d, t.dataset.f, num(t.value)); save(); render();
     } else if (t.id === 'summaryBox') {
@@ -1124,6 +1134,7 @@
       const o = state.orders.find((x) => x.id === b.dataset.id); if (!o) return;
       const vals = [$('#gt-' + o.id), $('#gtb-' + o.id)].map((g) => (g ? num(g.value) : null)).filter((v) => v && v > 0), got = vals.length ? vals[0] : null;
       o.arrived = true; o.tbc = false; o.arrivedOn = TODAY; o.arrivedAt = nowHM(); editOrder = null;
+      if (got) state.deliveryT[TODAY] = got;
       if (got && got < o.t - 0.5) {
         const left = Math.round((o.t - got) * 10) / 10;
         o.ordT = o.t; o.t = got;
@@ -1145,7 +1156,7 @@
       editOrder = null; save(); render(); toast(o.delayed ? 'Marked delayed — the plan now expects it no earlier than tomorrow night. Set a date when you know it.' : 'Delay removed');
     } else if (a === 'undoArrived') {
       const o = state.orders.find((x) => x.id === b.dataset.id); if (!o) return;
-      o.arrived = false; o.arrivedOn = null; o.arrivedAt = null; if (o.ordT) { o.t = o.ordT; o.ordT = null; }
+      if (o.arrivedOn) delete state.deliveryT[o.arrivedOn]; o.arrived = false; o.arrivedOn = null; o.arrivedAt = null; if (o.ordT) { o.t = o.ordT; o.ordT = null; }
       state.orders = state.orders.filter((x) => x.src !== o.id); save(); render(); toast('Delivery un-ticked');
     } else if (a === 'delOrder') { state.orders = state.orders.filter((o) => o.id !== b.dataset.id); save(); render(); }
     else if (a === 'resetOv') { state.overrides = {}; save(); render(); toast('Plan changes cleared'); }
@@ -1205,7 +1216,7 @@
     try {
       const j = JSON.parse(await f.text());
       if (!Array.isArray(j.readings) || typeof j.board !== 'object') throw new Error('not a Balter CO2 export');
-      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], events: j.events || [], notes: typeof j.notes === 'string' ? j.notes : (state.notes || ''), summary: typeof j.summary === 'string' ? j.summary : (state.summary || ''), invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
+      state = { ...state, readings: j.readings, board: j.board, overrides: j.overrides || {}, orders: j.orders || [], deliveryT: j.deliveryT || {}, events: j.events || [], notes: typeof j.notes === 'string' ? j.notes : (state.notes || ''), summary: typeof j.summary === 'string' ? j.summary : (state.summary || ''), invoices: j.invoices || state.invoices, settings: { ...DEFAULTS, ...(j.settings || {}) } };
       save(); render(); toast('Data imported');
     } catch (err) { toast('Could not import: ' + err.message); }
   });
