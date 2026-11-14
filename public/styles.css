@@ -261,3 +261,5 @@ tr.done td{background:rgba(71,215,172,.10)}
 .btn.on{background:#fdf0e3;border-color:#fdaa63}
 input.dvT{width:58px;font:inherit;font-size:12px;padding:1px 4px;border:1px solid #d9d9e3;border-radius:5px;background:#fff}
 input.dvD,input.dvM{font:inherit;font-size:11px;padding:1px 3px;border:1px solid #d9d9e3;border-radius:5px}
+.dvcell{line-height:1.55;font-size:12.5px;white-space:nowrap}.dvcell div{display:block}
+td .chip input.dvT{width:52px}
