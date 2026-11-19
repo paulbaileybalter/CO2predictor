@@ -43,6 +43,10 @@
     if (typeof s.summary !== 'string') s.summary = '';
     if (!Array.isArray(s.events)) s.events = [];
     if (!s.deliveryT || typeof s.deliveryT !== 'object') s.deliveryT = {};      // delivery sizes (t) you have recorded, by date
+    if (!s.bocSeeded) {                                                          // BOC tax invoices received 19 Nov: they supersede any earlier estimate or entry for those days
+      (window.BOC_INVOICES || []).forEach((x) => { if (!s.invoices.some((i) => i.date === x.date && i.docket === x.docket)) s.invoices.push({ ...x }); s.deliveryT[x.date] = x.kg / 1000; });
+      s.bocSeeded = true;
+    }
     ((window.SEED && window.SEED.events) || []).forEach((ev) => { if (!s.events.some((x) => x.id === ev.id) && !(s.removedEvents || []).includes(ev.id)) s.events.push({ ...ev }); });
     if (s.invNeedsSeed || !s.seededOrders) { seedOrders.forEach((o) => { if (!s.orders.some((x) => x.id === o.id)) s.orders.push({ ...o }); }); s.seededOrders = true; }
     s.settings = { ...DEFAULTS, ...(s.settings || {}) };
@@ -97,7 +101,7 @@
   // typical delivery size: invoiced kg of recent full loads (>= 14 t; smaller lines are part loads), plus loads seen on the gauge since the last invoice
   function deliverySize(past, set) {
     const inv = (state.invoices || []).filter((i) => i.kg >= 14000).sort((a, b) => (a.date < b.date ? -1 : 1));
-    const lastInv = inv.length ? inv[inv.length - 1].date : '0000';
+    const supa = inv.filter((i) => !i.supplier), lastInv = supa.length ? supa[supa.length - 1].date : '0000';
     // gauge points per tonne, from loads that appear on both the invoices and the gauge
     const ratios = [];
     inv.forEach((i) => { const g = past.find((x) => Math.abs(M.diffDays(i.date, x.d)) <= 2 && x.pts > 20); if (g) ratios.push(i.kg / g.pts); });
@@ -106,7 +110,7 @@
     const samples = inv.slice(-12).map((i) => ({ d: i.date, kg: i.kg, src: 'invoice' }));
     const maxKg = inv.length ? Math.max(...inv.map((i) => i.kg)) : set.load * 1000;      // a gauge estimate cannot beat the biggest load ever invoiced
     past.filter((x) => x.rec !== null && !inv.some((i) => Math.abs(M.diffDays(i.date, x.d)) <= 2)).forEach((x) => samples.push({ d: x.d, kg: x.rec * 1000, src: 'confirmed' }));
-    past.filter((x) => x.rec === null && x.d > lastInv && x.pts > 20).forEach((x) => samples.push({ d: x.d, kg: Math.min(maxKg, x.pts * kgPt), src: 'gauge' }));
+    past.filter((x) => x.rec === null && x.d > lastInv && x.pts > 20 && !inv.some((i) => Math.abs(M.diffDays(i.date, x.d)) <= 2)).forEach((x) => samples.push({ d: x.d, kg: Math.min(maxKg, x.pts * kgPt), src: 'gauge' }));
     samples.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
     const kgs = samples.slice(-12).map((x) => x.kg).sort((a, b) => a - b);
     if (!kgs.length) return { med: set.load, lo: set.load, hi: set.load, n: 0, kgPt, samples: [] };
@@ -760,11 +764,11 @@
       return o;
     });
     // gauge deliveries with no invoice
-    const invDates = out.map((x) => x.date), lastInv = invDates.length ? invDates[invDates.length - 1] : '0000';
+    const invDates = out.map((x) => x.date), supaOut = out.filter((x) => !x.supplier), lastInv = supaOut.length ? supaOut[supaOut.length - 1].date : '0000';
     const unmatched = C.past.filter((x) => x.pts > 8 && !invDates.some((d) => Math.abs(M.diffDays(d, x.d)) <= 2));
     const missing = unmatched.filter((x) => x.d <= lastInv), upcoming = unmatched.filter((x) => x.d > lastInv);
     // rate history
-    const rates = []; out.forEach((x) => { if (x.kg >= 1000) { const r = +x.rate.toFixed(4), l = rates[rates.length - 1]; if (!l || l.rate !== r) rates.push({ date: x.date, rate: r }); } });
+    const rates = []; supaOut.forEach((x) => { if (x.kg >= 1000) { const r = +x.rate.toFixed(4), l = rates[rates.length - 1]; if (!l || l.rate !== r) rates.push({ date: x.date, rate: r }); } });
     const matched = out.filter((x) => x.gaugeKg !== null && x.status !== 'nofit');
     const ratios = matched.filter((x) => x.pts > 20).map((x) => x.kg / x.pts).sort((a, b) => a - b);
     const calib = ratios.length >= 3 ? ratios[Math.floor(ratios.length / 2)] : null;
@@ -778,9 +782,22 @@
   };
   const money = (v) => '$' + v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  function bocPanel(boc) {
+    const kg = boc.reduce((a, x) => a + x.kg, 0), ex = boc.reduce((a, x) => a + x.ex, 0), g = boc.filter((x) => x.pts !== null), gKg = g.reduce((a, x) => a + x.pts * C.kgPt, 0), gInv = g.reduce((a, x) => a + x.kg, 0);
+    const l = boc[boc.length - 1], prodRate = l.prod / l.kg, surRate = l.sur / l.kg;
+    const body = boc.slice().reverse().map((x) => {
+      const gk = x.pts !== null ? x.pts * C.kgPt : null;
+      return `<tr><td class="sticky-col">${fmtD(x.date)}</td><td>${esc(x.docket)}<small>${esc(x.ref || '')}${x.po ? ' · ' + esc(x.po) : ''}</small></td><td class="r num"><b>${(x.kg / 1000).toFixed(2)} t</b></td><td class="r num">${money(x.prod)}</td><td class="r num">${money(x.sur)}</td><td class="r num">${money(x.ex)}<small>${money(x.ex * 1.1)} inc GST</small></td><td class="r num">$${(x.ex / x.kg).toFixed(4)}</td><td class="r num">${gk !== null ? (gk / 1000).toFixed(1) + ' t' : '–'}<small>${gk !== null ? (x.kg - gk >= 0 ? '+' : '−') + (Math.abs(x.kg - gk) / 1000).toFixed(1) + ' t invoiced' : ''}</small></td></tr>`;
+    }).join('');
+    return `<div class="pad" style="border-top:1px solid var(--line,#e6e6ee)"><b>BOC invoices</b> <span class="muted" style="font-size:12.5px">· from 3 Nov · bulk CO2 supplied, with the quantity taken straight off each tax invoice</span>
+      <div class="tbl-wrap" style="margin-top:8px"><table><thead><tr><th>Delivered</th><th>Invoice · Del ref · PO</th><th class="r">Supplied</th><th class="r">Product</th><th class="r">Surcharge</th><th class="r">Total ex GST</th><th class="r">All-in $/kg</th><th class="r">Gauge ≈ (calibrated)</th></tr></thead><tbody>${body}</tbody>
+      <tfoot><tr><td><b>Total</b></td><td></td><td class="r num"><b>${(kg / 1000).toFixed(2)} t</b></td><td></td><td></td><td class="r num"><b>${money(ex)}</b><small>${money(ex * 1.1)} inc GST</small></td><td class="r num">$${(ex / kg).toFixed(4)}</td><td class="r num">${g.length ? (gKg / 1000).toFixed(1) + ' t' : '–'}<small>${g.length ? (gInv - gKg >= 0 ? '+' : '−') + (Math.abs(gInv - gKg) / 1000).toFixed(1) + ' t invoiced' : ''}</small></td></tr></tfoot></table></div>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">BOC bills the product at $${prodRate.toFixed(4)}/kg plus a product surcharge of $${surRate.toFixed(2)}/kg — $${(prodRate + surRate).toFixed(4)}/kg all-in ex GST, against $${I_lastSupaRate().toFixed(4)}/kg on the Supagas statements. The gauge figure is an estimate at about ${C.kgPt.toFixed(0)} kg per point.</p></div>`;
+  }
+  const I_lastSupaRate = () => { const r = C.inv.rates; return r.length ? r[r.length - 1].rate : 0.7478; };
   function renderInvoices() {
     const I = C.inv, set = S(), kgPt = set.cap * 10;
-    const rows = I.out;
+    const rows = I.out.filter((x) => !x.supplier), boc = I.out.filter((x) => x.supplier === 'BOC');
     const real = rows.filter((x) => x.kg >= 1000);
     const totKg = real.reduce((s, x) => s + x.kg, 0), totEx = rows.reduce((s, x) => s + x.ex, 0);
     const flagged = rows.filter((x) => ['low', 'high', 'nofit', 'tiny', 'nogauge'].includes(x.status));
@@ -816,6 +833,7 @@
       ${finds.length ? `<div class="banner bad" style="margin:0 18px 14px;display:block"><b>Differences worth checking</b><ul class="plain" style="margin-top:6px">${finds.join('')}</ul></div>` : ''}
       ${up.length ? `<div class="note" style="padding-top:0"><b>Expected on the October statement:</b> ${up.map((x) => fmtS(x.d)).join(', ')} — about ${(upKg / 1000).toFixed(0)} t by the gauge, roughly ${money(upKg * I.newRate)} ex GST at the new rate. Compare when it arrives.</div>` : ''}
       ${calibTxt ? `<div class="note" style="padding-top:0">${calibTxt}</div>` : ''}
+      ${boc.length ? bocPanel(boc) : ''}
       <div class="panel pad" style="margin-top:14px"><b>What size do deliveries actually come in?</b>
         <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Plans assume about <b>${C.expT.toFixed(1)} t</b> per delivery${S().expT > 0 ? ' (your override)' : ''}, not the ${S().load} t ordered. From the last ${C.size.n} full loads: typical <b>${C.size.med.toFixed(1)} t</b>, usually between <b>${C.size.lo.toFixed(1)}</b> and <b>${C.size.hi.toFixed(1)} t</b>. Part loads under 14 t are left out. <b>(gauge)</b> sizes are estimates from the level rise; <b>(confirmed)</b> are figures you have entered; the rest are invoiced.</p>
         <div style="display:flex;gap:6px;flex-wrap:wrap">${C.size.samples.map((x) => `<span class="chip ${x.src === 'invoice' ? 'plain' : 'info'}" title="${x.src === 'gauge' ? 'Estimated from the gauge — no invoice yet' : x.src === 'confirmed' ? 'Confirmed figure you entered' : 'Invoiced'}"><i></i>${fmtS(x.d)} · ${(x.kg / 1000).toFixed(1)} t${x.src === 'gauge' ? ' (gauge)' : x.src === 'confirmed' ? ' (confirmed)' : ''}</span>`).join('')}</div></div>
