@@ -155,6 +155,7 @@
     // how big do deliveries really turn out? learned from the invoices (kg) plus gauge-estimated loads since the last invoice
     const size = deliverySize(past, set);
     const kgPt = size.kgPt;
+    past.forEach((x) => { x.t = x.rec !== null ? x.rec : x.pts * kgPt / 1000; });   // delivery sizes use the invoice-calibrated kg per gauge point, same as the Gauge ≈ chips
     const expT = set.expT > 0 ? +set.expT : size.med;
     const days = M.range(startDate, end).map((d, i) => ({ d, rec: recFor(d), frac: i === 0 ? frac0 : 1 }));
     const cfg = { floor: set.floor, scale: set.scale, halt: set.halt, loadPct: expT * 1000 / kgPt, maxFill: set.maxFill, lead: set.lead, allowedDows: set.dows, z: Z };
@@ -577,7 +578,7 @@
     // tooltips
     tips = {};
     hist.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b><br>${r.cur && r.pm === null ? 'Now (' + r.cur.h + ') ' + fP(r.cur.v) + ' (' + fT(r.cur.v) + ')<br>' : ''}${r.am !== null ? 'Morning ' + fP(r.am) + ' (' + fT(r.am) + ')<br>' : ''}${r.pm !== null ? 'Evening ' + fP(r.pm) + ' (' + fT(r.pm) + ')' : ''}`; });
-    C.past.forEach((dv) => { tips[dv.d] = (tips[dv.d] || '') + `<br><span style="color:#47D7AC">▲ Delivery received ≈ ${dv.t.toFixed(0)} t</span>`; });
+    C.past.forEach((dv) => { tips[dv.d] = (tips[dv.d] || '') + `<br><span style="color:#47D7AC">▲ Delivery received ≈ ${dv.t.toFixed(1)} t (${dv.rec !== null ? 'confirmed' : 'gauge est.'})</span>`; });
     sim.rows.forEach((r) => { tips[r.d] = `<b>${fmtD(r.d)}</b> · forecast<br>Use ${fT(r.use)} (${fP(r.use)})<br>Start ${fP(r.s)} → end ${fP(r.pre)} (${fT(r.pre)})${r.add ? '<br><span style="color:#FDAA63">◆ ' + tAt(r.d) + ' delivery +' + ldT(r.add) + ' → ' + fP(r.e) + '</span>' : ''}<br><span style="opacity:.7">90% range at end ${fP(r.lo, 0)}–${fP(r.hi, 0)}</span>`; });
     const plotX = [x(first, 0), x(last, 1)];
     g += `<rect id="lvlHit" x="${plotX[0]}" y="${T}" width="${plotX[1] - plotX[0]}" height="${H - T - B}" fill="transparent"/>`;
